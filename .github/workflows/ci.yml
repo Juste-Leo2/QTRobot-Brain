@@ -1,0 +1,75 @@
+# .github/workflows/ci.yml
+name: CI Windows - Tests avec modèles légers
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45  # Suffisant pour téléchargement + tests
+    
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          
+      - name: Installer les dépendances Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Restaurer le cache des modèles IA
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/
+            !models/**/*.tmp
+          key: ${{ runner.os }}-models-lite-${{ hashFiles('config/config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-models-lite-
+            
+      - name: Vérifier l'espace disque (avant)
+        run: |
+          Get-PSDrive C | Select-Object Used, Free
+          Write-Host "Espace disponible:"
+          Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'" | Select-Object @{Name="GBFree";Expression={[math]::Round($_.FreeSpace / 1GB, 2)}}
+          
+      - name: Télécharger les modèles (mode CI léger)
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: |
+          Write-Host "Cache miss - Téléchargement des modèles avec --ci-mode..."
+          python src/download_model.py --ci-mode
+          
+      - name: Vérifier les modèles (au cas où)
+        run: |
+          Write-Host "Vérification des modèles..."
+          python src/download_model.py --ci-mode
+          
+      - name: Vérifier l'espace disque (après)
+        run: |
+          Write-Host "Espace restant après téléchargement:"
+          Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'" | Select-Object @{Name="GBFree";Expression={[math]::Round($_.FreeSpace / 1GB, 2)}}
+          
+      - name: Lister les modèles installés
+        run: |
+          Write-Host "=== Modèles présents ==="
+          Get-ChildItem -Recurse models\ | Where-Object { !$_.PSIsContainer } | Select-Object Name, Length, Directory
+          
+      - name: Lancer les tests pytest
+        run: |
+          pytest -v --tb=short --cache-clear
+          
+      - name: Générer le rapport de couverture (optionnel)
+        run: |
+          pytest -v --tb=short --cov=src --cov-report=xml --cov-report=term-missing
+        continue-on-error: true  # Ne bloque pas le workflow si la couverture échoue

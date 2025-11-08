@@ -1,0 +1,1 @@
+https://huggingface.co/rhasspy/piper-voices/tree/main/fr/fr_FR/upmc/medium

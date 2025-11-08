@@ -1,0 +1,30 @@
+#général
+numpy
+
+#tts
+piper-tts
+
+#stt
+vosk
+pyaudio
+
+#visage
+mtcnn
+tensorflow
+opencv-python
+
+#LLM, gerer en background par llama_cpp
+requests
+
+#reconnaissance émotion
+#vide pour le moment
+
+#capteur entre QT et raspberry
+Flask
+
+#dossier
+pyyaml
+
+#test
+pytest 
+pytest-mock 

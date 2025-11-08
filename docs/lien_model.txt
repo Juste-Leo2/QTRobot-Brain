@@ -1,0 +1,14 @@
+llama_cpp
+https://github.com/ggml-org/llama.cpp/releases/download/b6987/llama-b6987-bin-win-cpu-x64.zip
+
+llm
+https://huggingface.co/LiquidAI/LFM2-8B-A1B-GGUF/resolve/main/LFM2-8B-A1B-Q4_K_M.gguf?download=true
+
+
+vosk:
+https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip
+
+piper tts
+https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true
+https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true

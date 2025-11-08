@@ -1,0 +1,30 @@
+# config/config.yaml
+
+# Configuration for the LLM server provided by llama.cpp
+llm_server:
+  url: "http://localhost:8084/completion"
+  headers:
+    Content-Type: "application/json"
+
+# Paths to all required models, relative to the project root directory.
+models:
+  stt_vosk:
+    en: "models/stt_vosk/vosk-model-small-en-us-0.15"
+    fr: "models/stt_vosk/vosk-model-small-fr-0.22"
+  tts_piper:
+    fr_upmc: "models/tts_piper/fr_FR-upmc-medium.onnx"
+  llm:
+    lfm_8b_q4: "models/llm/LFM2-8B-A1B-Q4_K_M.gguf"
+
+# Executable paths and arguments for background services
+executables:
+  llama_server:
+    path: "models/llama_cpp/llama-server.exe"
+    # NOTE FOR WINDOWS: The zip contains a 'bin' folder. The script will extract it automatically.
+    args: "-m {model_path} --port 8084 --ctx-size 2048"
+
+# Configuration for testing purposes
+testing:
+  output_dir: "tests/output"
+  # Set to 'true' to run integration tests that depend on the real LLM server
+  run_integration_tests: true
