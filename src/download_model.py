@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import argparse
 
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
+
 # Configuration
 CONFIG_PATH = "config/config.yaml"
 PROJECT_ROOT = Path(__file__).parent.parent
