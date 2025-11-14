@@ -1,4 +1,4 @@
-# QTRobot-Brain (WIP – Very Alpha)
+# QTRobot-Brain
 
 **Status**: In active development. Code is experimental, unstable, and mostly undocumented.  
 **Goal**: Build a complete, low-resource pipeline for real-time human–machine interaction on the QT robot  
