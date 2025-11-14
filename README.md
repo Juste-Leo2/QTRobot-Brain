@@ -26,9 +26,9 @@ Building an emotion detection system to make the QT robot more expressive and co
 An offline, low-compute pipeline enabling real-time interaction on embedded hardware.
 
 **Pipeline components**:
-- [x] **LLM backend ([llama.cpphttps](://github.com/ggml-org/llama.cpp) )**  
-- [x] **Speech-to-text ([Vosk](https://github.com/alphacep/vosk-api))** – 
-- [x] **Text-to-speech ([Piper](https://github.com/OHF-Voice/piper1-gpl  ))**
+- [x] **LLM backend ([llama.cpp](https://github.com/ggml-org/llama.cpp))**  
+- [x] **Speech-to-text ([Vosk](https://github.com/alphacep/vosk-api))**
+- [x] **Text-to-speech ([Piper](https://github.com/OHF-Voice/piper1-gpl))**
 - [ ] **Custom agent construction with personalized prompts**  
 - [ ] **Unified orchestration layer (complete pipeline build)**  
 
