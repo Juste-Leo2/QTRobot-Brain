@@ -12,6 +12,7 @@ pyaudio
 mtcnn
 tensorflow
 opencv-python
+Pillow
 
 #LLM, gerer en background par llama_cpp
 requests
@@ -28,3 +29,6 @@ pyyaml
 #test
 pytest 
 pytest-mock 
+
+#affichage
+customtkinter
