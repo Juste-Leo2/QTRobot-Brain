@@ -197,6 +197,11 @@ def main():
         print("🚀 Mode CI activé - Utilisation du modèle LLM léger (450M)")
         llm_url = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/LFM2-VL-450M-Q4_0.gguf?download=true"
     
+    llm_url_vision = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/mmproj-LFM2-VL-450M-Q8_0.gguf?download=true"
+    llm_url_mmproj = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/LFM2-VL-450M-Q4_0.gguf?download=true"
+
+
+
     # Modèles à vérifier et télécharger
     models_to_check: List[Tuple[str, str, str, str, bool]] = [
         # VOSK - Anglais (répertoire)
@@ -227,13 +232,27 @@ def main():
          "Piper TTS French Config",
          False),
 
-        # LLM (fichier)
+        # LLM text LFM2 8B A1B
         (config['models']['llm']['lfm_8b_q4'],
          llm_url,
          "file",
          "LLM (mode CI léger)" if args.ci_mode else "LLM LFM2-8B Q4",
          False),
-        
+
+        # LLM vision
+        (config['models']['llm']['LFM2-VL-450M-Q4'],
+         llm_url_vision,
+         "file",
+         "LFM2-VL 450M Vision",
+         False),
+
+        # LLM vision mmproj
+        (config['models']['llm']['mmproj-LFM2-VL-450M-Q8'],
+         llm_url_mmproj,
+         "file",
+         "LFM2-VL MMProj",
+         False),
+
         # Llama.cpp server (fichier .exe)
         (config['executables']['llama_server']['path'],
          "https://github.com/ggml-org/llama.cpp/releases/download/b6987/llama-b6987-bin-win-cpu-x64.zip",

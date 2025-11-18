@@ -1,6 +1,7 @@
 # src/processing/function.py
 import requests
 import json
+import time  # Ajout nécessaire pour le sleep
 
 AVAILABLE_TOOLS = [
     "get_time() # Utile pour connaître l'heure, la date ou le jour actuel.",
@@ -40,10 +41,7 @@ def build_tool_prompt(user_query: str, tools: list) -> str:
 def choose_tool(user_query: str, server_url: str, headers: dict) -> str:
     """
     Interroge le LLM pour choisir l'outil approprié pour une requête donnée.
-    :param user_query: La question de l'utilisateur.
-    :param server_url: L'URL du serveur de complétion.
-    :param headers: Les en-têtes de la requête HTTP.
-    :return: La fonction choisie sous forme de chaîne de caractères.
+    Intègre une gestion des erreurs 503 (Modèle en cours de chargement).
     """
     prompt = build_tool_prompt(user_query, AVAILABLE_TOOLS)
     
@@ -54,11 +52,37 @@ def choose_tool(user_query: str, server_url: str, headers: dict) -> str:
         "stop": ["\n"]
     }
 
-    response = requests.post(server_url, headers=headers, data=json.dumps(payload))
-    response.raise_for_status()
+    # --- AJOUT : Boucle de tentative (Retry) pour gérer le chargement du modèle ---
+    max_retries = 30 # 60 secondes max d'attente
+    
+    for attempt in range(max_retries):
+        try:
+            # On conserve data=json.dumps(payload) comme dans votre code original
+            response = requests.post(server_url, headers=headers, data=json.dumps(payload))
+            
+            # Si le serveur répond 503, c'est qu'il charge le modèle
+            if response.status_code == 503:
+                # Optionnel : print pour le debug, peut être commenté si trop verbeux
+                # print(f"⏳ Fonction : Modèle en chargement... (Tentative {attempt+1}/{max_retries})")
+                time.sleep(2)
+                continue
 
-    response_data = response.json()
-    return response_data['content'].strip()
+            response.raise_for_status()
+
+            response_data = response.json()
+            return response_data['content'].strip()
+            
+        except requests.exceptions.ConnectionError:
+            # Si le serveur n'est pas encore accessible du tout
+            time.sleep(2)
+            continue
+        except Exception as e:
+            # En cas d'erreur critique, on remonte l'exception ou on renvoie None
+            # Pour ne pas bloquer les tests on raise l'erreur originale
+            raise e
+
+    # Si on sort de la boucle sans succès
+    raise requests.exceptions.HTTPError("Timeout: Le serveur LLM est resté en 503 trop longtemps.")
 
 def main_function_loop():
     """Boucle principale pour tester la sélection de fonction en console."""
@@ -81,6 +105,7 @@ def main_function_loop():
 
         except requests.exceptions.RequestException as e:
             print(f"\nErreur de connexion au serveur : {e}")
+            # On break ici car si le serveur est down manuellement, inutile de spammer
             break
         except KeyboardInterrupt:
             print("\nAu revoir !")

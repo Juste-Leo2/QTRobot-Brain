@@ -6,6 +6,10 @@ llm_server:
   headers:
     Content-Type: "application/json"
 
+# IDENTIQUE À main.py
+llm_server_vision:
+  url: "http://localhost:8088/v1/chat/completions"
+
 # Paths to all required models, relative to the project root directory.
 models:
   stt_vosk:
@@ -15,16 +19,21 @@ models:
     fr_upmc: "models/tts_piper/fr_FR-upmc-medium.onnx"
   llm:
     lfm_8b_q4: "models/llm/LFM2-8B-A1B-Q4_K_M.gguf"
+    LFM2-VL-450M-Q4: "models/llm/LFM2-VL-450M-Q4_0.gguf"
+    mmproj-LFM2-VL-450M-Q8: "models/llm/mmproj-LFM2-VL-450M-Q8_0.gguf"
 
 # Executable paths and arguments for background services
 executables:
   llama_server:
     path: "models/llama_cpp/llama-server.exe"
-    # NOTE FOR WINDOWS: The zip contains a 'bin' folder. The script will extract it automatically.
     args: "-m {model_path} --port 8084 --ctx-size 2048"
+  
+  # IDENTIQUE À text.txt (sans ctx-size superflu)
+  llama_server_vision:
+    path: "models/llama_cpp/llama-server.exe"
+    args: "-m {model_path} --mmproj {model_path_mmproj} --port 8088"
 
 # Configuration for testing purposes
 testing:
   output_dir: "tests/output"
-  # Set to 'true' to run integration tests that depend on the real LLM server
   run_integration_tests: true
