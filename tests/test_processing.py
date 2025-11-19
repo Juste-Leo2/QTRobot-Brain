@@ -120,6 +120,7 @@ def run_llama_server(config):
 def run_llama_server_vision(config):
     """
     Fixture pour démarrer le serveur vision.
+    Améliorée pour gérer les délais longs en CI/CD et logger les erreurs.
     """
     if not config['testing']['run_integration_tests']:
         yield None
@@ -134,53 +135,88 @@ def run_llama_server_vision(config):
     model_path = Path(config['models']['llm']['LFM2-VL-450M-Q4']).resolve()
     model_path_mmproj = Path(config['models']['llm']['mmproj-LFM2-VL-450M-Q8']).resolve()
     
+    # Vérification préalable de l'existence des modèles
+    if not model_path.exists() or not model_path_mmproj.exists():
+        pytest.fail(f"Modèles manquants sur le runner.\nModel: {model_path}\nProj: {model_path_mmproj}", pytrace=False)
+
     args_str = server_config['args'].format(
         model_path=model_path, 
         model_path_mmproj=model_path_mmproj
     )
     
     command = [str(server_path)] + args_str.split()
-    print(f"\n🚀 Démarrage du serveur Vision : {' '.join(command)}")
     
+    # Détection si on est sur GitHub Actions ou un environnement CI lent
+    is_ci = os.getenv('CI') or os.getenv('GITHUB_ACTIONS')
+    timeout_duration = 180 if is_ci else 60  # 3 minutes en CI, 1 minute en local
+    
+    print(f"\n🚀 [Vision] Démarrage (Timeout set à {timeout_duration}s) : {' '.join(command)}")
+    
+    # On redirige stdout/stderr vers des fichiers temporaires pour éviter les blocages de buffer
+    # et pour pouvoir les lire facilement en cas d'erreur.
+    stdout_file = tempfile.TemporaryFile()
+    stderr_file = tempfile.TemporaryFile()
+
     server_process = subprocess.Popen(
         command, 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.PIPE,
+        stdout=stdout_file, 
+        stderr=stderr_file,
         creationflags=subprocess.CREATE_NO_WINDOW
     )
     
-    # URL racine pour le health check vision (souvent un port différent, ex: 8088)
-    server_url_root = "http://localhost:8088/" 
-    # Note: Assurez-vous que config['llm_server_vision']['url'] correspond au port lancé par les arguments
-    
-    print("⏳ Attente de la disponibilité du serveur Vision...")
+    server_url_root = "http://localhost:8088/"
     start_time = time.time()
     ready = False
     
-    while time.time() - start_time < 60:
-        if server_process.poll() is not None:
-            stderr_output = server_process.stderr.read().decode('utf-8', errors='ignore')
-            pytest.fail(f"Le serveur Vision a crashé au démarrage:\n{stderr_output}", pytrace=False)
-            break 
-        try:
-            requests.get(server_url_root, timeout=1)
-            ready = True
-            break
-        except:
-            time.sleep(1)
-            
-    if not ready:
-        server_process.terminate()
-        pytest.fail("Le serveur Vision n'a pas démarré correctement (Timeout).")
-
-    print(f"✅ Serveur Vision prêt en {round(time.time() - start_time, 2)}s.")
-    yield server_process
-    
-    server_process.terminate()
     try:
-        server_process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        server_process.kill()
+        while time.time() - start_time < timeout_duration:
+            # 1. Vérifier si le processus est mort
+            if server_process.poll() is not None:
+                break # Sort de la boucle pour traiter l'erreur
+
+            # 2. Tenter la connexion
+            try:
+                requests.get(server_url_root, timeout=1)
+                ready = True
+                break
+            except requests.exceptions.RequestException:
+                time.sleep(2) # Attendre un peu plus entre les essais
+        
+        # --- GESTION DES ERREURS ET LOGS ---
+        if not ready:
+            # Lecture des logs pour le débogage
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            out = stdout_file.read().decode('utf-8', errors='replace')
+            err = stderr_file.read().decode('utf-8', errors='replace')
+            
+            return_code = server_process.poll()
+            
+            if return_code is not None:
+                msg = f"❌ Le serveur Vision a crashé (Code: {return_code})."
+            else:
+                msg = f"❌ Timeout : Le serveur Vision ne répond pas après {timeout_duration}s."
+                server_process.terminate()
+
+            # On affiche les logs complets dans l'erreur pytest
+            pytest.fail(f"{msg}\n\n--- STDOUT ---\n{out}\n\n--- STDERR ---\n{err}", pytrace=False)
+
+        print(f"✅ Serveur Vision prêt en {round(time.time() - start_time, 2)}s.")
+        yield server_process
+        
+    finally:
+        # Nettoyage
+        if server_process.poll() is None:
+            server_process.terminate()
+            try:
+                server_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                server_process.kill()
+        
+        stdout_file.close()
+        stderr_file.close()
+
+
 
 
 @pytest.fixture(scope="module")
