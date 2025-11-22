@@ -191,7 +191,7 @@ def main():
     print("✅ Configuration chargée avec succès\n")
     
     # URLs des modèles (avec modèle CI plus petit)
-    llm_url = "https://huggingface.co/LiquidAI/LFM2-8B-A1B-GGUF/resolve/main/LFM2-8B-A1B-Q4_K_M.gguf?download=true"
+    llm_url = "https://huggingface.co/unsloth/LFM2-8B-A1B-GGUF/resolve/main/LFM2-8B-A1B-UD-Q3_K_XL.gguf?download=true"
     
     if args.ci_mode:
         print("🚀 Mode CI activé - Utilisation du modèle LLM léger (450M)")
@@ -233,10 +233,10 @@ def main():
          False),
 
         # LLM text LFM2 8B A1B
-        (config['models']['llm']['lfm_8b_q4'],
+        (config['models']['llm']['lfm_8b'],
          llm_url,
          "file",
-         "LLM (mode CI léger)" if args.ci_mode else "LLM LFM2-8B Q4",
+         "LLM (mode CI léger)" if args.ci_mode else "LLM LFM2-8B",
          False),
 
         # LLM vision

@@ -16,7 +16,7 @@ call .\.venv\Scripts\activate.bat
 
 echo Lancement...
 "%UV_EXE%" run src/download_model.py
-"%UV_EXE%" run src/main.py
+"%UV_EXE%" run main.py
 
 echo Fermeture...
 call .\.venv\Scripts\deactivate.bat

@@ -55,7 +55,7 @@ def run_llama_server(config):
             pytest.fail(f"L'exécutable du serveur n'a pas été trouvé : {server_path}", pytrace=False)
 
     # Remplacer le placeholder dans les arguments
-    model_path = Path(config['models']['llm']['lfm_8b_q4'])
+    model_path = Path(config['models']['llm']['lfm_8b'])
     args_str = server_config['args'].format(model_path=model_path)
     
     # Construction de la commande Windows
@@ -281,12 +281,24 @@ def test_piper_tts_synthesis(config, setup_output_dir):
 def test_function_chooser_mocked(mocker, config):
     """Teste le choix de fonction avec un LLM mocké (rapide)."""
     mock_response = mocker.Mock()
-    mock_response.json.return_value = {'content': ' get_weather(city: Paris)'}
+    
+    # 1. Adaptation de la réponse simulée : 
+    # Le LLM renvoie maintenant juste le mot clé (souvent avec un espace avant)
+    mock_response.json.return_value = {'content': ' get_time'}
+    
+    # 2. Important : On doit simuler le code 200, car ton code vérifie le 503
+    mock_response.status_code = 200 
     mock_response.raise_for_status.return_value = None
+    
     mocker.patch('requests.post', return_value=mock_response)
+    
     server_config = config['llm_server']
-    chosen_tool = choose_tool("Quel temps fait-il à Paris ?", server_config['url'], server_config['headers'])
-    assert chosen_tool == "get_weather(city: Paris)"
+    
+    # 3. On pose une question liée au temps pour être cohérent
+    chosen_tool = choose_tool("Quelle heure est-il ?", server_config['url'], server_config['headers'])
+    
+    # 4. On vérifie que le nettoyage (.strip()) a bien fonctionné
+    assert chosen_tool == "get_time"
 
 def test_chat_response_mocked(mocker, config):
     """Teste une réponse de chat avec un LLM mocké (rapide)."""

@@ -18,7 +18,7 @@ models:
   tts_piper:
     fr_upmc: "models/tts_piper/fr_FR-upmc-medium.onnx"
   llm:
-    lfm_8b_q4: "models/llm/LFM2-8B-A1B-Q4_K_M.gguf"
+    lfm_8b: "models/llm/LFM2-8B-A1B-UD-Q3_K_XL.gguf"
     LFM2-VL-450M-Q4: "models/llm/LFM2-VL-450M-Q4_0.gguf"
     mmproj-LFM2-VL-450M-Q8: "models/llm/mmproj-LFM2-VL-450M-Q8_0.gguf"
 
@@ -37,3 +37,4 @@ executables:
 testing:
   output_dir: "tests/output"
   run_integration_tests: true
+
