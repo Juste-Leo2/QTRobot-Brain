@@ -17,7 +17,6 @@ class LLMServerManager:
             return yaml.safe_load(f)
 
     def _get_executable_path(self, key):
-        """Retourne le chemin de l'exe selon l'OS"""
         platform_key = 'linux' if sys.platform == 'linux' else 'win'
         return Path(self.config['executables'][key][platform_key])
 
@@ -70,12 +69,22 @@ class LLMServerManager:
             except OSError:
                 pass
 
+        # --- FIX LINUX LIBS ---
+        # On ajoute le dossier contenant l'exe au LD_LIBRARY_PATH
+        # pour qu'il trouve libmtmd.so et autres
+        my_env = os.environ.copy()
+        if sys.platform == 'linux':
+            exe_dir = str(Path(command[0]).parent.absolute())
+            current_ld = my_env.get("LD_LIBRARY_PATH", "")
+            my_env["LD_LIBRARY_PATH"] = f"{exe_dir}:{current_ld}"
+
         try:
             return subprocess.Popen(
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=creation_flags
+                creationflags=creation_flags,
+                env=my_env # On passe l'environnement modifié
             )
         except Exception as e:
             print(f"❌ Erreur lancement EXE ({command[0]}) : {e}")
