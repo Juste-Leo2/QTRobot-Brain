@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 import argparse
 
+# --- FIX WINDOWS ENCODING ---
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # Configuration
 CONFIG_PATH = "config/config.yaml"
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -36,7 +41,6 @@ def download_file(url: str, destination: Path, desc: str = "") -> bool:
     print(f"📥 Téléchargement {desc}...")
     destination.parent.mkdir(parents=True, exist_ok=True)
     
-    # Adaptation commande curl selon OS
     curl_cmd = 'curl'
     if sys.platform == "win32" and shutil.which('curl.exe'):
         curl_cmd = 'curl.exe'
@@ -61,7 +65,8 @@ def download_file(url: str, destination: Path, desc: str = "") -> bool:
 
 def extract_zip(zip_path: Path, extract_to: Path, expected_item: str, is_directory: bool) -> bool:
     """
-    Extrait une archive zip avec gestion spécifique Linux pour les binaires
+    Extrait une archive zip. 
+    Sur Linux, extrait TOUT le contenu du dossier binaire pour avoir les libs (.so).
     """
     print(f"📦 Extraction de {zip_path.name}...")
     
@@ -72,23 +77,32 @@ def extract_zip(zip_path: Path, extract_to: Path, expected_item: str, is_directo
             llama_linux_files = [f for f in zip_ref.namelist() if f.startswith(bin_prefix)]
             
             if llama_linux_files and sys.platform == "linux":
-                found_in_zip = False
+                found_binary = False
+                print("   -> Extraction complète des binaires et libs Linux...")
+                
                 for file_info in llama_linux_files:
-                    file_name = file_info[len(bin_prefix):]
-                    if file_name and file_name == expected_item:
+                    file_name = file_info[len(bin_prefix):] # retire build/bin/
+                    
+                    # On extrait TOUT ce qui n'est pas un dossier vide
+                    if file_name: 
                         source = zip_ref.open(file_info)
-                        target_path = extract_to / expected_item
+                        target_path = extract_to / file_name
                         target_path.parent.mkdir(parents=True, exist_ok=True)
+                        
                         with open(target_path, 'wb') as target:
                             shutil.copyfileobj(source, target)
-                        os.chmod(target_path, 0o755)
-                        found_in_zip = True
+                        
+                        # Si c'est notre binaire principal, on le rend exécutable
+                        if file_name == expected_item:
+                            os.chmod(target_path, 0o755)
+                            found_binary = True
+                        # Les .so n'ont pas forcément besoin d'être +x, mais ça ne gène pas
                 
-                if found_in_zip:
-                    print(f"   ✅ Binaire Linux extrait : {extract_to / expected_item}")
+                if found_binary:
+                    print(f"   ✅ Binaire et Libs Linux extraits dans : {extract_to}")
                     return True
 
-            # Logique standard
+            # Logique standard (Windows ou autres archives)
             zip_ref.extractall(extract_to)
 
         # Vérification finale
@@ -122,21 +136,16 @@ def main():
     config = load_config()
     is_linux = sys.platform == "linux"
     
-    # 1. URLs des modèles
-    
-    # -- LLM Textuelle (Standard vs CI) --
+    # URLs
     llm_text_url = "https://huggingface.co/unsloth/LFM2-8B-A1B-GGUF/resolve/main/LFM2-8B-A1B-UD-Q3_K_XL.gguf?download=true"
     
     if args.ci_mode:
         print("🚀 Mode CI activé - Utilisation du modèle LLM léger (350M)")
-        # C'est ici qu'on remplace par le modèle texte 350M
         llm_text_url = "https://huggingface.co/LiquidAI/LFM2-350M-GGUF/resolve/main/LFM2-350M-Q4_K_M.gguf?download=true"
 
-    # -- LLM Vision --
     llm_vision_url = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/LFM2-VL-450M-Q4_0.gguf?download=true"
     llm_mmproj_url = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/mmproj-LFM2-VL-450M-Q8_0.gguf?download=true"
 
-    # -- Binaire Llama.cpp --
     if is_linux:
         llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b6987/llama-b6987-bin-ubuntu-x64.zip"
         llama_exe_path = config['executables']['llama_server']['linux']
@@ -146,27 +155,16 @@ def main():
         llama_exe_path = config['executables']['llama_server']['win']
         llama_exe_name_in_zip = "llama-server.exe"
 
-    # Liste des tâches
     models_to_check: List[Tuple[str, str, str, str, bool]] = [
-        # VOSK
         (config['models']['stt_vosk']['fr'], "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip", "zip", "VOSK FR", True),
-        
-        # TTS Piper
         (config['models']['tts_piper']['fr_upmc'], "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true", "file", "Piper TTS Model", False),
         (str(config['models']['tts_piper']['fr_upmc']) + ".json", "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx.json?download=true", "file", "Piper TTS Config", False),
-        
-        # LLM Text (Va télécharger le 350M mais le sauvegarder à la place du 8B si --ci-mode)
         (config['models']['llm']['lfm_8b'], llm_text_url, "file", "LLM Text Main", False),
-
-        # LLM Vision
         (config['models']['llm']['LFM2-VL-450M-Q4'], llm_vision_url, "file", "LLM Vision Base", False),
         (config['models']['llm']['mmproj-LFM2-VL-450M-Q8'], llm_mmproj_url, "file", "LLM Vision Projector", False),
-
-        # Llama Server Binary
         (llama_exe_path, llama_bin_url, "zip", "Llama Server Binary", False),
     ]
 
-    # Exécution
     print(f"--- Vérification des {len(models_to_check)} fichiers requis ---")
     
     for model_path, url, dl_type, desc, is_dir in models_to_check:
@@ -174,8 +172,6 @@ def main():
         
         if full_dest_path.exists():
             print(f"✅ {desc} présent.")
-            # Attention : Si le fichier existe déjà (ex: le gros modèle), le script ne le remplace pas.
-            # Pour switcher entre CI et Normal localement, il faut supprimer le fichier modèle manuellement.
             continue
             
         temp_dir = tempfile.mkdtemp()
