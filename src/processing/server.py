@@ -3,13 +3,10 @@ import time
 import requests
 import yaml
 import os
-import signal
+import sys
 from pathlib import Path
 
 class LLMServerManager:
-    """
-    Gère le cycle de vie des DEUX serveurs (Texte et Vision).
-    """
     def __init__(self, config_path="config/config.yaml"):
         self.process_text = None
         self.process_vision = None
@@ -19,27 +16,24 @@ class LLMServerManager:
         with open(path, "r", encoding='utf-8') as f:
             return yaml.safe_load(f)
 
-    def start(self):
-        """Lance les deux serveurs."""
-        print("🚀 Initialisation des serveurs IA...")
-        
-        # 1. Démarrage Serveur TEXTE
-        ok_text = self._start_server_text()
-        
-        # 2. Démarrage Serveur VISION
-        ok_vision = self._start_server_vision()
+    def _get_executable_path(self, key):
+        """Retourne le chemin de l'exe selon l'OS"""
+        platform_key = 'linux' if sys.platform == 'linux' else 'win'
+        return Path(self.config['executables'][key][platform_key])
 
+    def start(self):
+        print("🚀 Initialisation des serveurs IA...")
+        ok_text = self._start_server_text()
+        ok_vision = self._start_server_vision()
         return ok_text and ok_vision
 
     def _start_server_text(self):
-        """Logique pour lancer le serveur textuel (Port 8084)"""
-        print("   -> Démarrage Llama Texte (8084)...")
-        
-        exe_path = Path(self.config['executables']['llama_server']['path'])
+        exe_path = self._get_executable_path('llama_server')
         model_path = Path(self.config['models']['llm']['lfm_8b'])
-        args_template = self.config['executables']['llama_server']['args'] # "-m {model_path}..."
         
-        # On remplit les trous dans la commande
+        print(f"   -> Démarrage Llama Texte (8084) [{exe_path}]...")
+        
+        args_template = self.config['executables']['llama_server']['args']
         cmd_args = args_template.format(model_path=str(model_path))
         full_cmd = [str(exe_path)] + cmd_args.split()
 
@@ -47,15 +41,13 @@ class LLMServerManager:
         return self._wait_for_url(self.config['llm_server']['url'])
 
     def _start_server_vision(self):
-        """Logique pour lancer le serveur vision (Port 8088)"""
-        print("   -> Démarrage Llama Vision (8088)...")
-
-        exe_path = Path(self.config['executables']['llama_server_vision']['path'])
+        exe_path = self._get_executable_path('llama_server_vision')
         model_path = Path(self.config['models']['llm']['LFM2-VL-450M-Q4'])
         mmproj_path = Path(self.config['models']['llm']['mmproj-LFM2-VL-450M-Q8'])
-        args_template = self.config['executables']['llama_server_vision']['args']
+        
+        print(f"   -> Démarrage Llama Vision (8088) [{exe_path}]...")
 
-        # Ici on a deux variables à remplir : le modèle et le projecteur (mmproj)
+        args_template = self.config['executables']['llama_server_vision']['args']
         cmd_args = args_template.format(
             model_path=str(model_path),
             model_path_mmproj=str(mmproj_path)
@@ -67,8 +59,17 @@ class LLMServerManager:
         return self._wait_for_url(base_url)
 
     def _launch_process(self, command):
-        """Fonction utilitaire pour lancer un .exe sans fenêtre noire."""
-        creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        creation_flags = 0
+        if os.name == 'nt':
+            creation_flags = subprocess.CREATE_NO_WINDOW
+        
+        # S'assurer que le fichier est exécutable sous Linux
+        if sys.platform == 'linux':
+            try:
+                os.chmod(command[0], 0o755)
+            except OSError:
+                pass
+
         try:
             return subprocess.Popen(
                 command,
@@ -77,11 +78,10 @@ class LLMServerManager:
                 creationflags=creation_flags
             )
         except Exception as e:
-            print(f"❌ Erreur lancement EXE : {e}")
+            print(f"❌ Erreur lancement EXE ({command[0]}) : {e}")
             return None
 
     def _wait_for_url(self, url, timeout=30):
-        """Ping une URL jusqu'à ce qu'elle réponde."""
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
@@ -93,7 +93,6 @@ class LLMServerManager:
         return False
 
     def stop(self):
-        """Coupe tout."""
         print("🛑 Arrêt des serveurs...")
         if self.process_text: self.process_text.kill()
         if self.process_vision: self.process_vision.kill()

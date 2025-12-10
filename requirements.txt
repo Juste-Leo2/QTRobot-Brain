@@ -32,3 +32,6 @@ pytest-mock
 
 #affichage
 customtkinter
+
+#Gestion ROSpy
+paramiko

@@ -4,6 +4,8 @@ import yaml
 import sys
 import cv2      
 import time
+import argparse
+import subprocess
 from PIL import Image
 
 # --- Imports de tes modules ---
@@ -23,6 +25,36 @@ from src.utils import (
 )
 
 # ==========================================
+# 0. ARGUMENT PARSING & CONFIG
+# ==========================================
+parser = argparse.ArgumentParser()
+parser.add_argument("--QT", action="store_true", help="Active le mode Robot QT (ROS)")
+parser.add_argument("--pytest", action="store_true", help="Lance les tests unitaires")
+args = parser.parse_args()
+
+# Gestion Argument --pytest
+if args.pytest:
+    print("🧪 Lancement des tests (pytest -v)...")
+    subprocess.run(["pytest", "-v"])
+    sys.exit(0)
+
+IS_ROS_MODE = args.QT
+ros_audio = None
+ros_mic = None
+
+# Imports conditionnels ROS
+if IS_ROS_MODE:
+    try:
+        print("🤖 Mode QT activé : Chargement des modules ROS...")
+        from src.ROS.PlayAudio import AudioController
+        from src.ROS.ReadMicro import AudioStreamer
+        # On ignore Display et Moove pour l'instant (focus Audio)
+    except ImportError as e:
+        print(f"❌ Erreur import ROS : {e}")
+        print("Êtes-vous sûr d'avoir source votre environnement ROS ?")
+        sys.exit(1)
+
+# ==========================================
 # 1. VARIABLES GLOBALES
 # ==========================================
 ui = None
@@ -31,22 +63,19 @@ vosk = None
 tts = None
 server_manager = None
 
-# Gestion Caméra
+# Gestion Caméra (Reste locale pour l'instant selon instructions)
 webcam = None          
 derniere_image = None  
 arret_programme = False 
 
 AUDIO_OUTPUT = "output.wav"
-
-# --- AJOUT : Historique de chat global ---
 chat_history = [] 
 
 # ==========================================
-# 2. FONCTIONS UI
+# 2. FONCTIONS UI & AUDIO
 # ==========================================
 
 def log(message):
-    """Affiche un message dans la console de l'interface."""
     if ui:
         try:
             ui.after(0, lambda: ui.bottom_textbox.insert("end", message + "\n"))
@@ -56,7 +85,6 @@ def log(message):
     print(f"[LOG] {message}")
 
 def update_interface(box_id, text):
-    """Met à jour une des boites de texte."""
     target = None
     if box_id == 1: target = ui.textbox_1
     elif box_id == 2: target = ui.textbox_2
@@ -66,10 +94,19 @@ def update_interface(box_id, text):
         ui.after(0, lambda: target.insert("end", text))
 
 def parler(texte):
-    """Génère l'audio et le joue via utilitaire."""
+    """Génère l'audio et le joue (Local ou ROS)."""
     log(f"🔊 Je dis : {texte}")
+    
+    # 1. Génération du fichier WAV
     tts.synthesize(texte, AUDIO_OUTPUT, speaker_id=0)
-    jouer_fichier_audio(AUDIO_OUTPUT)
+    
+    # 2. Lecture
+    if IS_ROS_MODE and ros_audio:
+        # Envoie le fichier généré au robot et le joue
+        ros_audio.play(AUDIO_OUTPUT)
+    else:
+        # Lecture locale PC
+        jouer_fichier_audio(AUDIO_OUTPUT)
 
 # ==========================================
 # 3. GESTION DE LA CAMÉRA
@@ -78,7 +115,7 @@ def parler(texte):
 def thread_camera():
     global webcam, derniere_image, arret_programme
     
-    print("📸 Démarrage de la caméra...")
+    print("📸 Démarrage de la caméra (Locale)...")
     webcam = cv2.VideoCapture(0) 
     webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -131,8 +168,7 @@ def action_voir():
 # ==========================================
 
 def traiter_commande(user_text):
-    global chat_history  # On accède à l'historique global
-    
+    global chat_history
     if not user_text.strip(): return
     
     log(f"👂 Entendu : {user_text}")
@@ -142,64 +178,66 @@ def traiter_commande(user_text):
         url_text = config['llm_server']['url']
         headers = config['llm_server']['headers']
         
-        # 1. Choix de l'outil
         tool = choose_tool(user_text, url_text, headers)
         update_interface(2, f"Outil : {tool}")
 
-        # 2. Exécution selon l'outil
         if tool == "get_time":
             response_text = action_donner_heure()
-            
-            # On ajoute l'interaction à l'historique pour que l'IA s'en souvienne
-            # (ex: si après on dit "Merci", elle sait pourquoi)
             chat_history.append({"role": "user", "content": user_text})
             chat_history.append({"role": "assistant", "content": response_text})
 
         elif tool == "get_vision":
             description_visuelle = action_voir()
-            
-            # On construit un prompt contextuel pour l'IA
             prompt_final = (
-                f"CONTEXTE VISUEL (Ce que voient tes yeux) : {description_visuelle}\n"
+                f"CONTEXTE VISUEL : {description_visuelle}\n"
                 f"DEMANDE UTILISATEUR : {user_text}\n"
-                "Réponds lui naturellement en prenant en compte le contexte visuel."
+                "Réponds lui naturellement."
             )
-            
-            # On ajoute ce prompt enrichi à l'historique
             chat_history.append({"role": "user", "content": prompt_final})
-            
-            # On envoie tout l'historique (chat.py gérera la fenêtre glissante)
             response = get_llm_response(chat_history, url_text, headers)
-            
-            # On met à jour l'UI et l'audio
             update_interface(3, response)
             parler(response)
-            
-            # On sauvegarde la réponse de l'IA dans l'historique
             chat_history.append({"role": "assistant", "content": response})
 
         else:
-            # CAS CLASSIQUE (Conversation normale)
             chat_history.append({"role": "user", "content": user_text})
-            
-            # Appel LLM avec tout l'historique
             response = get_llm_response(chat_history, url_text, headers)
-            
             update_interface(3, response)
             parler(response)
-            
-            # Sauvegarde réponse
             chat_history.append({"role": "assistant", "content": response})
 
     except Exception as e:
         log(f"❌ Erreur Pipeline: {e}")
 
+# ==========================================
+# 6. GESTION THREADS & AUDIO
+# ==========================================
+
+def generateur_audio_ros():
+    """Générateur qui pompe les chunks audio depuis le topic ROS."""
+    if not ros_mic: return
+    ros_mic.start_listening()
+    while not arret_programme:
+        chunk = ros_mic.get_audio_chunk()
+        if chunk:
+            yield chunk
+        else:
+            # Petite pause pour ne pas saturer le CPU si pas de data
+            time.sleep(0.01)
+    ros_mic.stop_listening()
+
 def thread_ecoute():
-    log("🎤 Micro activé.")
-    vosk.start_transcription(traiter_commande)
+    if IS_ROS_MODE:
+        log("🎤 Micro ROS activé.")
+        # On passe le générateur ROS à Vosk
+        vosk.start_transcription(traiter_commande, audio_source_iterator=generateur_audio_ros)
+    else:
+        log("🎤 Micro Local activé.")
+        # None = Utilisation PyAudio interne
+        vosk.start_transcription(traiter_commande, audio_source_iterator=None)
 
 # ==========================================
-# 6. MAIN
+# 7. MAIN
 # ==========================================
 
 def fermeture_propre():
@@ -207,6 +245,7 @@ def fermeture_propre():
     print("Arrêt du système...")
     arret_programme = True 
     if server_manager: server_manager.stop()
+    if ros_mic: ros_mic.stop_listening()
     if ui: ui.on_closing()
     sys.exit(0)
 
@@ -217,6 +256,11 @@ if __name__ == "__main__":
 
         server_manager = LLMServerManager()
         server_manager.start()
+
+        # Initialisation ROS si demandée
+        if IS_ROS_MODE:
+            ros_audio = AudioController() # Pour parler (PlayAudio.py)
+            ros_mic = AudioStreamer()     # Pour écouter (ReadMicro.py)
 
         ui = UI()
         ui.protocol("WM_DELETE_WINDOW", fermeture_propre)

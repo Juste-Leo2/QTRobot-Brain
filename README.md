@@ -34,6 +34,14 @@ An offline, low-compute pipeline enabling real-time interaction on embedded hard
 
 ---
 
+## Features Under Development
+
+- [x] Windows & Linux (x64) support using GitHub workflows
+- [ ] Script tested directly on the QT robot
+- [x] `--QT` argument in `main.py`: to use when running on the robot
+- [x] `--pytest` argument in `main.py`: used to test the pipeline (excluding the UI)
+- [x] `--ci-mode` argument in `download_model.py`: replaces the large 8B model with a smaller 350M model
+
 ## Why make it public?
 Building in the open for **transparency, feedback, and accountability**.  
 **Contributors welcome** — feel free to open an issue if you want to help!

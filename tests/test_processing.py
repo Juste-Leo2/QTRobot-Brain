@@ -1,5 +1,6 @@
 # tests/test_processing.py
 
+import sys
 import pytest
 import yaml
 import os
@@ -32,128 +33,126 @@ def config():
 #### SERVEUR ####
 #################
 
+
 @pytest.fixture(scope="session")
 def run_llama_server(config):
     """
-    Fixture pour démarrer et arrêter le serveur llama-server.exe en arrière-plan.
-    Remplace le sleep par une vérification active de la connexion.
+    Fixture pour démarrer le serveur LLM Texte.
+    Compatible Windows/Linux et nouvelle config.
     """
     if not config['testing']['run_integration_tests']:
-        print("\nSkipping llama-server startup (integration tests disabled).")
+        print("\nSkipping llama-server startup.")
         yield None
         return
 
-    server_config = config['executables']['llama_server']
-    server_path = Path(server_config['path'])
+    # 1. Récupération du chemin de l'exécutable selon l'OS
+    is_win = sys.platform == "win32"
+    platform_key = 'win' if is_win else 'linux'
     
-    # Vérifie que l'exécutable existe
+    try:
+        exe_path_str = config['executables']['llama_server'][platform_key]
+        server_path = Path(exe_path_str).resolve()
+    except KeyError:
+        pytest.fail(f"Config invalide pour l'OS {platform_key}", pytrace=False)
+
     if not server_path.exists():
-        alt_path = server_path.parent / "bin" / "llama-server.exe"
-        if alt_path.exists():
-            server_path = alt_path
-        else:
-            pytest.fail(f"L'exécutable du serveur n'a pas été trouvé : {server_path}", pytrace=False)
+        pytest.fail(f"L'exécutable du serveur n'a pas été trouvé : {server_path}", pytrace=False)
 
-    # Remplacer le placeholder dans les arguments
+    # 2. Préparation de la commande
     model_path = Path(config['models']['llm']['lfm_8b'])
-    args_str = server_config['args'].format(model_path=model_path)
+    args_template = config['executables']['llama_server']['args']
+    args_str = args_template.format(model_path=model_path)
     
-    # Construction de la commande Windows
     command = [str(server_path)] + args_str.split()
+    print(f"\n🚀 Démarrage Serveur Texte : {' '.join(command)}")
 
-    print(f"\n🚀 Démarrage du serveur LLM (Texte) avec la commande : {' '.join(command)}")
-    
+    # 3. Gestion des flags Windows uniquement
+    creation_flags = 0
+    if is_win:
+        creation_flags = subprocess.CREATE_NO_WINDOW
+
     server_process = None
     try:
-        # Démarrage du processus Windows sans fenêtre console
         server_process = subprocess.Popen(
             command, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE, 
-            creationflags=subprocess.CREATE_NO_WINDOW
+            creationflags=creation_flags # Compatible Linux maintenant (0)
         )
         
-        # --- MODIFICATION: Gestion du Timeout intelligente (au lieu de sleep) ---
-        print("⏳ Attente de la disponibilité du serveur Texte...")
-        
-        # On récupère l'URL cible depuis la config pour tester la connexion
+        # 4. Attente active
         target_url = config['llm_server']['url']
         start_time = time.time()
         server_ready = False
-        timeout = 60  # 60 secondes max pour charger le modèle
+        timeout = 60
 
+        print(f"⏳ Attente connexion sur {target_url}...")
         while time.time() - start_time < timeout:
-            # Vérifier si le processus a crashé immédiatement
             if server_process.poll() is not None:
-                stderr_output = server_process.stderr.read().decode('utf-8', errors='ignore')
-                pytest.fail(f"Le serveur s'est arrêté prématurément pendant le démarrage:\n{stderr_output}", pytrace=False)
+                stderr = server_process.stderr.read().decode('utf-8', errors='ignore')
+                pytest.fail(f"Crash au démarrage:\n{stderr}", pytrace=False)
             
             try:
-                # On tente une requête simple. Même si on reçoit une 404 ou 405 (Method Not Allowed),
-                # cela signifie que le serveur HTTP tourne.
                 requests.get(target_url, timeout=1)
                 server_ready = True
                 break
             except requests.exceptions.RequestException:
-                # Le serveur n'est pas encore prêt, on attend 1 seconde
                 time.sleep(1)
         
         if not server_ready:
             server_process.terminate()
-            pytest.fail(f"Timeout : Le serveur LLM n'a pas répondu après {timeout} secondes sur {target_url}.")
+            pytest.fail(f"Timeout sur {target_url}")
         
-        print(f"✅ Serveur Texte prêt en {round(time.time() - start_time, 2)}s.")
+        print("✅ Serveur Texte prêt.")
         yield server_process
         
     finally:
         if server_process:
-            print("\n🛑 Arrêt du serveur LLM...")
+            print("🛑 Arrêt Serveur Texte.")
             server_process.terminate()
-            try:
-                server_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                server_process.kill()
-            print("✅ Serveur arrêté.")
+            server_process.wait()
 
 
 @pytest.fixture(scope="session")
 def run_llama_server_vision(config):
     """
-    Fixture pour démarrer le serveur vision.
-    Améliorée pour gérer les délais longs en CI/CD et logger les erreurs.
+    Fixture pour démarrer le serveur Vision.
+    Compatible Windows/Linux et nouvelle config.
     """
     if not config['testing']['run_integration_tests']:
         yield None
         return
 
-    server_config = config['executables']['llama_server_vision']
-    server_path = Path(server_config['path'])
+    # 1. Chemin Exécutable
+    is_win = sys.platform == "win32"
+    platform_key = 'win' if is_win else 'linux'
     
-    if not server_path.exists():
-         server_path = server_path.parent / "bin" / "llama-server.exe"
+    exe_path_str = config['executables']['llama_server_vision'][platform_key]
+    server_path = Path(exe_path_str).resolve()
     
+    # 2. Modèles
     model_path = Path(config['models']['llm']['LFM2-VL-450M-Q4']).resolve()
     model_path_mmproj = Path(config['models']['llm']['mmproj-LFM2-VL-450M-Q8']).resolve()
-    
-    # Vérification préalable de l'existence des modèles
-    if not model_path.exists() or not model_path_mmproj.exists():
-        pytest.fail(f"Modèles manquants sur le runner.\nModel: {model_path}\nProj: {model_path_mmproj}", pytrace=False)
 
-    args_str = server_config['args'].format(
+    if not model_path.exists() or not model_path_mmproj.exists():
+        pytest.fail(f"Modèles Vision manquants.\nCheck: {model_path}", pytrace=False)
+
+    # 3. Commande
+    args_template = config['executables']['llama_server_vision']['args']
+    args_str = args_template.format(
         model_path=model_path, 
         model_path_mmproj=model_path_mmproj
     )
     
     command = [str(server_path)] + args_str.split()
-    
-    # Détection si on est sur GitHub Actions ou un environnement CI lent
-    is_ci = os.getenv('CI') or os.getenv('GITHUB_ACTIONS')
-    timeout_duration = 180 if is_ci else 60  # 3 minutes en CI, 1 minute en local
-    
-    print(f"\n🚀 [Vision] Démarrage (Timeout set à {timeout_duration}s) : {' '.join(command)}")
-    
-    # On redirige stdout/stderr vers des fichiers temporaires pour éviter les blocages de buffer
-    # et pour pouvoir les lire facilement en cas d'erreur.
+    print(f"\n🚀 Démarrage Serveur Vision : {' '.join(command)}")
+
+    # 4. Flags
+    creation_flags = 0
+    if is_win:
+        creation_flags = subprocess.CREATE_NO_WINDOW
+
+    # Fichiers logs temporaires
     stdout_file = tempfile.TemporaryFile()
     stderr_file = tempfile.TemporaryFile()
 
@@ -161,61 +160,42 @@ def run_llama_server_vision(config):
         command, 
         stdout=stdout_file, 
         stderr=stderr_file,
-        creationflags=subprocess.CREATE_NO_WINDOW
+        creationflags=creation_flags
     )
     
-    server_url_root = "http://localhost:8088/"
+    server_url_root = "http://localhost:8088/health" # Endpoint santé souvent dispo
+    # Fallback si health n'existe pas sur cette version de llama.cpp: racine
+    
     start_time = time.time()
     ready = False
+    timeout = 180 # Vision est lourd
+
+    print(f"⏳ Attente connexion Vision (Port 8088)...")
+    while time.time() - start_time < timeout:
+        if server_process.poll() is not None:
+            break
+        try:
+            # On essaye de taper la racine, ça renverra 404 ou 200, mais ça prouve que le serveur est up
+            requests.get("http://localhost:8088/", timeout=1)
+            ready = True
+            break
+        except requests.exceptions.RequestException:
+            time.sleep(2)
     
-    try:
-        while time.time() - start_time < timeout_duration:
-            # 1. Vérifier si le processus est mort
-            if server_process.poll() is not None:
-                break # Sort de la boucle pour traiter l'erreur
+    if not ready:
+        stdout_file.seek(0); stderr_file.seek(0)
+        out = stdout_file.read().decode('utf-8', errors='replace')
+        err = stderr_file.read().decode('utf-8', errors='replace')
+        pytest.fail(f"❌ Serveur Vision échec.\nSTDERR: {err}", pytrace=False)
 
-            # 2. Tenter la connexion
-            try:
-                requests.get(server_url_root, timeout=1)
-                ready = True
-                break
-            except requests.exceptions.RequestException:
-                time.sleep(2) # Attendre un peu plus entre les essais
+    print("✅ Serveur Vision prêt.")
+    yield server_process
         
-        # --- GESTION DES ERREURS ET LOGS ---
-        if not ready:
-            # Lecture des logs pour le débogage
-            stdout_file.seek(0)
-            stderr_file.seek(0)
-            out = stdout_file.read().decode('utf-8', errors='replace')
-            err = stderr_file.read().decode('utf-8', errors='replace')
-            
-            return_code = server_process.poll()
-            
-            if return_code is not None:
-                msg = f"❌ Le serveur Vision a crashé (Code: {return_code})."
-            else:
-                msg = f"❌ Timeout : Le serveur Vision ne répond pas après {timeout_duration}s."
-                server_process.terminate()
-
-            # On affiche les logs complets dans l'erreur pytest
-            pytest.fail(f"{msg}\n\n--- STDOUT ---\n{out}\n\n--- STDERR ---\n{err}", pytrace=False)
-
-        print(f"✅ Serveur Vision prêt en {round(time.time() - start_time, 2)}s.")
-        yield server_process
-        
-    finally:
-        # Nettoyage
-        if server_process.poll() is None:
-            server_process.terminate()
-            try:
-                server_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                server_process.kill()
-        
-        stdout_file.close()
-        stderr_file.close()
-
+    if server_process.poll() is None:
+        server_process.terminate()
+        server_process.wait()
+    stdout_file.close()
+    stderr_file.close()
 
 
 

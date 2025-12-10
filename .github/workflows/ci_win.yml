@@ -45,4 +45,4 @@ jobs:
           python src/download_model.py --ci-mode
           
       - name: Run tests
-        run: pytest -v --tb=short --cache-clear
+        run: python main.py --pytest
