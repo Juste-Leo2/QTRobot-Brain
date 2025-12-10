@@ -8,6 +8,12 @@ import argparse
 import subprocess
 from PIL import Image
 
+# --- FIX ENCODAGE WINDOWS (CRITIQUE POUR CI/GITHUB ACTIONS) ---
+# Force l'UTF-8 pour éviter les erreurs avec les émojis (🧪, 🤖, etc.)
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # --- Imports de tes modules ---
 from src.ui import UI
 from src.data_acquisition.vosk_function import VoskRecognizer
@@ -35,8 +41,9 @@ args = parser.parse_args()
 # Gestion Argument --pytest
 if args.pytest:
     print("🧪 Lancement des tests (pytest -v)...")
-    subprocess.run(["pytest", "-v"])
-    sys.exit(0)
+    # On utilise sys.executable pour être sûr d'utiliser le même python
+    result = subprocess.run([sys.executable, "-m", "pytest", "-v"])
+    sys.exit(result.returncode)
 
 IS_ROS_MODE = args.QT
 ros_audio = None
