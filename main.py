@@ -8,277 +8,278 @@ import argparse
 import subprocess
 from PIL import Image
 
-# --- FIX ENCODAGE WINDOWS (CRITIQUE POUR CI/GITHUB ACTIONS) ---
-# Force l'UTF-8 pour éviter les erreurs avec les émojis (🧪, 🤖, etc.)
+# --- FIX ENCODAGE WINDOWS ---
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
 
-# --- Imports de tes modules ---
-from src.ui import UI
+# --- IMPORTS ---
 from src.data_acquisition.vosk_function import VoskRecognizer
 from src.final_interaction.tts_piper import PiperTTS
 from src.processing.chat import get_llm_response
-from src.processing.function import choose_tool
+from src.processing.function import choose_tool # AGENT 1
+from src.processing.agents import run_agent_3_gesture, run_agent_4_display # AGENTS 3 & 4
 from src.processing.server import LLMServerManager
-
-# --- Import des utilitaires refactorisés ---
-from src.utils import (
-    obtenir_heure_formatee, 
-    jouer_fichier_audio, 
-    redimensionner_image_pour_ui, 
-    analyser_image_via_api
-)
+from src.data_acquisition.mtcnn_function import detect_faces, draw_faces
+from src.utils import (obtenir_heure_formatee, jouer_fichier_audio, redimensionner_image_pour_ui, analyser_image_via_api)
 
 # ==========================================
-# 0. ARGUMENT PARSING & CONFIG
+# 0. CONFIG & ARGUMENTS
 # ==========================================
 parser = argparse.ArgumentParser()
-parser.add_argument("--QT", action="store_true", help="Active le mode Robot QT (ROS)")
-parser.add_argument("--pytest", action="store_true", help="Lance les tests unitaires")
+parser.add_argument("--QT", action="store_true", help="Mode QT Robot (Headless + ROS)")
+parser.add_argument("--pytest", action="store_true", help="Lance les tests")
 args = parser.parse_args()
 
-# Gestion Argument --pytest
-if args.pytest:
-    print("🧪 Lancement des tests (pytest -v)...")
-    # On utilise sys.executable pour être sûr d'utiliser le même python
-    result = subprocess.run([sys.executable, "-m", "pytest", "-v"])
-    sys.exit(result.returncode)
-
 IS_ROS_MODE = args.QT
+
+if args.pytest:
+    subprocess.run([sys.executable, "-m", "pytest", "-v"])
+    sys.exit(0)
+
+# --- ROS IMPORTS ---
 ros_audio = None
 ros_mic = None
+ros_move = None
+ros_display = None
+ros_head = None
 
-# Imports conditionnels ROS
 if IS_ROS_MODE:
     try:
-        print("🤖 Mode QT activé : Chargement des modules ROS...")
+        print("🤖 Chargement Modules ROS...")
         from src.ROS.PlayAudio import AudioController
         from src.ROS.ReadMicro import AudioStreamer
-        # On ignore Display et Moove pour l'instant (focus Audio)
+        from src.ROS.Moove import MoveController
+        from src.ROS.Display import DisplayController
+        from src.ROS.HeadControl import HeadController
     except ImportError as e:
-        print(f"❌ Erreur import ROS : {e}")
-        print("Êtes-vous sûr d'avoir source votre environnement ROS ?")
+        print(f"❌ Erreur ROS : {e}")
         sys.exit(1)
+else:
+    from src.ui import UI
 
 # ==========================================
-# 1. VARIABLES GLOBALES
+# 1. VARIABLES
 # ==========================================
 ui = None
 config = None
 vosk = None
 tts = None
 server_manager = None
-
-# Gestion Caméra (Reste locale pour l'instant selon instructions)
 webcam = None          
 derniere_image = None  
 arret_programme = False 
-
 AUDIO_OUTPUT = "output.wav"
 chat_history = [] 
 
 # ==========================================
-# 2. FONCTIONS UI & AUDIO
+# 2. UI HELPERS
 # ==========================================
-
-def log(message):
-    if ui:
+def log(msg):
+    print(f"[LOG] {msg}")
+    if ui and not IS_ROS_MODE:
         try:
-            ui.after(0, lambda: ui.bottom_textbox.insert("end", message + "\n"))
-            ui.after(0, lambda: ui.bottom_textbox.see("end"))
-        except:
-            pass
-    print(f"[LOG] {message}")
+            ui.bottom_textbox.insert("end", msg + "\n")
+            ui.bottom_textbox.see("end")
+        except: pass
 
-def update_interface(box_id, text):
-    target = None
-    if box_id == 1: target = ui.textbox_1
-    elif box_id == 2: target = ui.textbox_2
-    elif box_id == 3: target = ui.textbox_3
+def update_ui_text(box_id, text):
+    if IS_ROS_MODE: return # Pas d'UI graphique en mode QT
+    target = {1: ui.textbox_1, 2: ui.textbox_2, 3: ui.textbox_3}.get(box_id)
     if target:
         ui.after(0, lambda: target.delete("1.0", "end"))
         ui.after(0, lambda: target.insert("end", text))
 
 def parler(texte):
-    """Génère l'audio et le joue (Local ou ROS)."""
-    log(f"🔊 Je dis : {texte}")
-    
-    # 1. Génération du fichier WAV
+    log(f"🔊 {texte}")
     tts.synthesize(texte, AUDIO_OUTPUT, speaker_id=0)
-    
-    # 2. Lecture
     if IS_ROS_MODE and ros_audio:
-        # Envoie le fichier généré au robot et le joue
         ros_audio.play(AUDIO_OUTPUT)
     else:
-        # Lecture locale PC
         jouer_fichier_audio(AUDIO_OUTPUT)
 
 # ==========================================
-# 3. GESTION DE LA CAMÉRA
+# 3. CAMERA & TRACKING (OPTIMISÉ)
 # ==========================================
-
 def thread_camera():
     global webcam, derniere_image, arret_programme
     
-    print("📸 Démarrage de la caméra (Locale)...")
-    webcam = cv2.VideoCapture(0) 
-    webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    print("📸 Démarrage Caméra (Optimisation CPU activée)")
+    webcam = cv2.VideoCapture(0)
+    webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     
-    if not webcam.isOpened():
-        log("❌ Erreur: Impossible d'ouvrir la webcam.")
-        return
+    if not webcam.isOpened(): return
+
+    # --- PARAMÈTRES D'OPTIMISATION ---
+    FRAME_SKIP = 20  # Traiter 1 image sur 5 (Ajuste à 10 si ça lag encore)
+    frame_count = 0
+    current_faces = [] # Mémoire tampon des visages
 
     while not arret_programme:
         ret, frame = webcam.read()
         if ret:
-            derniere_image = frame
-            if ui:
-                frame_resized = redimensionner_image_pour_ui(frame)
-                if frame_resized is not None:
-                    pil_img = Image.fromarray(frame_resized)
-                    ui.after(0, lambda img=pil_img: ui.mettre_a_jour_image(img))
-        time.sleep(0.04)
+            derniere_image = frame.copy()
+            frame_count += 1
+            
+            # 1. DÉTECTION (Seulement toutes les N frames)
+            if frame_count % FRAME_SKIP == 0:
+                # Astuce : On réduit l'image pour MTCNN -> Beaucoup plus rapide
+                # On divise la taille par 2 pour la détection (320x240)
+                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                
+                detected_small = detect_faces(small_frame)
+                
+                # On remet les coordonnées à l'échelle (x2)
+                current_faces = []
+                for face in detected_small:
+                    x, y, w, h = face['box']
+                    face['box'] = [x*2, y*2, w*2, h*2] # Rescale
+                    current_faces.append(face)
 
+                # 2. COMMANDE MOTEUR (Uniquement quand on a une nouvelle détection)
+                if current_faces and IS_ROS_MODE and ros_head:
+                    # Plus gros visage
+                    face = max(current_faces, key=lambda f: f['confidence'])
+                    x, y, w, h = face['box']
+                    cx, cy = x + w/2, y + h/2
+                    h_img, w_img, _ = frame.shape
+                    
+                    # Commande moteur ROS
+                    ros_head.move_head_to_center(cx, cy, w_img, h_img)
+
+            # 3. DESSIN (Sur toutes les frames pour fluidité visuelle)
+            # On utilise 'current_faces' qui garde la position d'il y a quelques millisecondes
+            if current_faces:
+                draw_faces(frame, current_faces)
+
+            # 4. UI UPDATE (PC Local)
+            if ui and not IS_ROS_MODE:
+                res = redimensionner_image_pour_ui(frame)
+                if res is not None:
+                    ui.after(0, lambda i=Image.fromarray(res): ui.mettre_a_jour_image(i))
+        
+        # Petite pause pour ne pas saturer la boucle
+        time.sleep(0.03) 
+        
     webcam.release()
-    print("📸 Caméra arrêtée.")
 
 # ==========================================
-# 4. ACTIONS SPÉCIFIQUES
+# 4. PIPELINE PRINCIPAL
 # ==========================================
-
-def action_donner_heure():
-    texte = obtenir_heure_formatee()
-    update_interface(3, texte)
-    parler(texte)
-    return texte
-
-def action_voir():
-    global derniere_image
-    if derniere_image is None:
-        return "Erreur: Caméra non disponible."
-
-    log("👁️ Analyse LFM2-VL en cours...")
-    url_vision = config['llm_server_vision']['url']
-    description = analyser_image_via_api(derniere_image, url_vision)
-    
-    if description:
-        log(f"👁️ Vision Brute : {description}")
-        return description
-    else:
-        return "Je n'arrive pas à analyser l'image."
-
-# ==========================================
-# 5. LOGIQUE PRINCIPALE (ROUTEUR)
-# ==========================================
-
 def traiter_commande(user_text):
     global chat_history
     if not user_text.strip(): return
     
-    log(f"👂 Entendu : {user_text}")
-    update_interface(1, user_text)
+    update_ui_text(1, user_text)
+    url = config['llm_server']['url']
+    headers = config['llm_server']['headers']
 
     try:
-        url_text = config['llm_server']['url']
-        headers = config['llm_server']['headers']
-        
-        tool = choose_tool(user_text, url_text, headers)
-        update_interface(2, f"Outil : {tool}")
+        # --- AGENT 1 (OUTILS) ---
+        tool = choose_tool(user_text, url, headers)
+        update_ui_text(2, f"Outil: {tool}")
+        log(f"Agent 1 a choisi : {tool}")
 
+        response_text = ""
+
+        # --- AGENT 2 (CHAT) ou FONCTION ---
         if tool == "get_time":
-            response_text = action_donner_heure()
-            chat_history.append({"role": "user", "content": user_text})
-            chat_history.append({"role": "assistant", "content": response_text})
-
+            response_text = obtenir_heure_formatee()
+            
         elif tool == "get_vision":
-            description_visuelle = action_voir()
-            prompt_final = (
-                f"CONTEXTE VISUEL : {description_visuelle}\n"
-                f"DEMANDE UTILISATEUR : {user_text}\n"
-                "Réponds lui naturellement."
-            )
-            chat_history.append({"role": "user", "content": prompt_final})
-            response = get_llm_response(chat_history, url_text, headers)
-            update_interface(3, response)
-            parler(response)
-            chat_history.append({"role": "assistant", "content": response})
-
+            desc = action_voir()
+            prompt_vis = f"Context: User showed an image described as '{desc}'. User said: '{user_text}'."
+            chat_history.append({"role": "user", "content": prompt_vis})
+            response_text = get_llm_response(chat_history, url, headers)
+            
         else:
             chat_history.append({"role": "user", "content": user_text})
-            response = get_llm_response(chat_history, url_text, headers)
-            update_interface(3, response)
-            parler(response)
-            chat_history.append({"role": "assistant", "content": response})
+            response_text = get_llm_response(chat_history, url, headers)
+
+        chat_history.append({"role": "assistant", "content": response_text})
+        update_ui_text(3, response_text)
+
+        # --- AGENT 3 (GESTUELLE) ---
+        gesture_action = run_agent_3_gesture(user_text, response_text, config)
+        if gesture_action:
+            log(f"Agent 3 Action : {gesture_action['name']}")
+            if IS_ROS_MODE and ros_move:
+                if gesture_action['type'] == 'emotion':
+                    ros_move.emotion(gesture_action['name'])
+                else:
+                    ros_move.gesture(gesture_action['name'])
+
+        # --- AGENT 4 (DISPLAY) ---
+        display_action = run_agent_4_display(user_text, response_text, config)
+        if display_action:
+            log(f"Agent 4 Display : [{display_action['type']}] {display_action['content']}")
+            if IS_ROS_MODE and ros_display:
+                if display_action['type'] == 'text':
+                    ros_display.show_text(display_action['content'])
+                else:
+                    ros_display.show_image(display_action['content'])
+
+        # Enfin, on parle
+        parler(response_text)
 
     except Exception as e:
-        log(f"❌ Erreur Pipeline: {e}")
+        log(f"Erreur Pipeline: {e}")
+
+def action_voir():
+    if derniere_image is None: return "Image noire."
+    return analyser_image_via_api(derniere_image, config['llm_server_vision']['url']) or "Rien."
 
 # ==========================================
-# 6. GESTION THREADS & AUDIO
+# 5. AUDIO & MAIN LOOP
 # ==========================================
-
-def generateur_audio_ros():
-    """Générateur qui pompe les chunks audio depuis le topic ROS."""
+def ros_audio_gen():
     if not ros_mic: return
     ros_mic.start_listening()
     while not arret_programme:
         chunk = ros_mic.get_audio_chunk()
-        if chunk:
-            yield chunk
-        else:
-            # Petite pause pour ne pas saturer le CPU si pas de data
-            time.sleep(0.01)
+        if chunk: yield chunk
+        else: time.sleep(0.01)
     ros_mic.stop_listening()
 
 def thread_ecoute():
-    if IS_ROS_MODE:
-        log("🎤 Micro ROS activé.")
-        # On passe le générateur ROS à Vosk
-        vosk.start_transcription(traiter_commande, audio_source_iterator=generateur_audio_ros)
-    else:
-        log("🎤 Micro Local activé.")
-        # None = Utilisation PyAudio interne
-        vosk.start_transcription(traiter_commande, audio_source_iterator=None)
+    src = ros_audio_gen if IS_ROS_MODE else None
+    vosk.start_transcription(traiter_commande, audio_source_iterator=src)
 
-# ==========================================
-# 7. MAIN
-# ==========================================
-
-def fermeture_propre():
+def shutdown():
     global arret_programme
-    print("Arrêt du système...")
-    arret_programme = True 
+    arret_programme = True
     if server_manager: server_manager.stop()
-    if ros_mic: ros_mic.stop_listening()
+    if IS_ROS_MODE and ros_mic: ros_mic.stop_listening()
     if ui: ui.on_closing()
     sys.exit(0)
 
 if __name__ == "__main__":
-    try:
-        with open("config/config.yaml", "r", encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+    with open("config/config.yaml", "r", encoding='utf-8') as f:
+        config = yaml.safe_load(f)
 
-        server_manager = LLMServerManager()
-        server_manager.start()
+    server_manager = LLMServerManager()
+    server_manager.start()
 
-        # Initialisation ROS si demandée
-        if IS_ROS_MODE:
-            ros_audio = AudioController() # Pour parler (PlayAudio.py)
-            ros_mic = AudioStreamer()     # Pour écouter (ReadMicro.py)
-
+    if IS_ROS_MODE:
+        ros_audio = AudioController()
+        ros_mic = AudioStreamer()
+        ros_move = MoveController()
+        ros_display = DisplayController()
+        ros_head = HeadController()
+    else:
         ui = UI()
-        ui.protocol("WM_DELETE_WINDOW", fermeture_propre)
+        ui.protocol("WM_DELETE_WINDOW", shutdown)
 
-        vosk = VoskRecognizer(model_path=config['models']['stt_vosk']['fr'])
-        tts = PiperTTS(model_path=config['models']['tts_piper']['fr_upmc'])
+    vosk = VoskRecognizer(model_path=config['models']['stt_vosk']['fr'])
+    tts = PiperTTS(model_path=config['models']['tts_piper']['fr_upmc'])
 
-        threading.Thread(target=thread_camera, daemon=True).start()
-        threading.Thread(target=thread_ecoute, daemon=True).start()
+    threading.Thread(target=thread_camera, daemon=True).start()
+    threading.Thread(target=thread_ecoute, daemon=True).start()
 
+    if IS_ROS_MODE:
+        try:
+            while True: time.sleep(1)
+        except KeyboardInterrupt: shutdown()
+    else:
         ui.mainloop()
-
-    except KeyboardInterrupt:
-        fermeture_propre()

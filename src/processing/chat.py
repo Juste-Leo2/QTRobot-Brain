@@ -8,7 +8,7 @@ import os
 import time
 
 # Constantes (Inchangées)
-SYSTEM_MESSAGE = "Tu es une IA utile et bienveillante qui aide l'utilisateur, tu disposera d'information pour guider tes réponses. Tes réponses doivent être UNE SEUL PHRASE"
+SYSTEM_MESSAGE = "Tu es une IA utile et bienveillante qui aide l'utilisateur, tu disposera d'information pour guider tes réponses. Tes réponses doivent être COURTES"
 BOS_TOKEN = "<|startoftext|>"
 IM_START_TOKEN = "<|im_start|>"
 IM_END_TOKEN = "<|im_end|>"
@@ -44,7 +44,7 @@ def get_llm_response(history: list, server_url: str, headers: dict) -> str:
     # Logique de génération STRICTEMENT conservée
     payload = {
         "prompt": prompt_string,
-        "temperature": 0.1,
+        "temperature": 0.2,
         "n_predict": 2048,
         "stop": [IM_END_TOKEN, f"{IM_START_TOKEN}user"]
     }
