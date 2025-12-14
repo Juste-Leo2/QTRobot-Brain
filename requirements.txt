@@ -35,3 +35,6 @@ customtkinter
 
 #Gestion ROSpy
 paramiko
+
+#API google
+google-genai

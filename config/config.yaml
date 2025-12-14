@@ -1,6 +1,5 @@
 # config/config.yaml
 
-# Configuration for the LLM server provided by llama.cpp
 llm_server:
   url: "http://localhost:8084/completion"
   headers:
@@ -9,7 +8,6 @@ llm_server:
 llm_server_vision:
   url: "http://localhost:8088/v1/chat/completions"
 
-# Paths to all required models
 models:
   stt_vosk:
     en: "models/stt_vosk/vosk-model-small-en-us-0.15"
@@ -21,19 +19,51 @@ models:
     LFM2-VL-450M-Q4: "models/llm/LFM2-VL-450M-Q4_0.gguf"
     mmproj-LFM2-VL-450M-Q8: "models/llm/mmproj-LFM2-VL-450M-Q8_0.gguf"
 
-# Executable paths and arguments based on OS
 executables:
   llama_server:
     win: "models/llama_cpp/llama-server.exe"
     linux: "models/llama_cpp/llama-server"
     args: "-m {model_path} --port 8084 --ctx-size 2048"
-  
   llama_server_vision:
     win: "models/llama_cpp/llama-server.exe"
     linux: "models/llama_cpp/llama-server"
     args: "-m {model_path} --mmproj {model_path_mmproj} --port 8088"
 
-# Configuration for testing purposes
 testing:
   output_dir: "tests/output"
   run_integration_tests: true
+
+# --- COMMANDES ROBOT QT (POUR AGENTS 3 & 4) ---
+qt_robot:
+  gestures:
+    - "QT/hi"
+    - "QT/bye"
+    - "QT/introduce"
+    - "QT/recite_poem"
+    - "QT/show_right"
+    - "QT/show_left"
+    - "QT/yawn"
+    - "QT/point_front"
+    - "QT/point_right"
+    - "QT/point_left"
+    - "QT/clap"
+    - "QT/wave"
+    - "QT/nod"
+    - "QT/shake_head"
+    - "QT/dance"
+    - "QT/thinking"
+    - "QT/bravo"
+    - "QT/surprise"
+    - "QT/what"
+    - "QT/imitation"
+    - "QT/strike"
+    - "QT/kiss"
+    - "QT/breath"
+  
+  emotions:
+    - "QT/happy"
+    - "QT/sad"
+    - "QT/angry"
+    - "QT/surprise"
+    - "QT/fear"
+    - "QT/disgust"

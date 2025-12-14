@@ -1,4 +1,3 @@
-# .github/workflows/ci_lin.yml
 name: CI Linux - Light Models Tests
 
 on:
@@ -22,9 +21,6 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      # --- ÉTAPE SPÉCIFIQUE LINUX ---
-      # OpenCV a besoin de libgl1
-      # PyAudio (Vosk) a besoin de portaudio19-dev
       - name: Install System Dependencies
         run: |
           sudo apt-get update
@@ -42,7 +38,6 @@ jobs:
           path: |
             models/
             !models/**/*.tmp
-          # La clé commence par ${{ runner.os }} (ici Linux) pour ne pas mélanger avec le cache Windows
           key: ${{ runner.os }}-models-lite-${{ hashFiles('config/config.yaml') }}
           restore-keys: |
             ${{ runner.os }}-models-lite-
@@ -50,9 +45,9 @@ jobs:
       - name: Download models (if cache missed)
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
-          echo "Cache miss - Downloading models with --ci-mode..."
           python src/download_model.py --ci-mode
       
-      # Lancement via main.py comme demandé
       - name: Run tests via Main
-        run: python main.py --pytest
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: python main.py --pytest --API "$GOOGLE_API_KEY"

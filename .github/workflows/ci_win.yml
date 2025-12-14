@@ -1,4 +1,4 @@
-# .github/workflows/ci.yml
+# .github/workflows/ci_win.yml
 name: CI Windows - Light Models Tests
 
 on:
@@ -10,7 +10,7 @@ on:
 jobs:
   test:
     runs-on: windows-latest
-    timeout-minutes: 45 # Sufficient for download + tests
+    timeout-minutes: 45
     
     steps:
       - name: Checkout code
@@ -41,8 +41,9 @@ jobs:
       - name: Download models (if cache missed)
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
-          Write-Host "Cache miss - Downloading models with --ci-mode..."
           python src/download_model.py --ci-mode
           
       - name: Run tests
-        run: python main.py --pytest
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: python main.py --pytest --API "$env:GOOGLE_API_KEY"
