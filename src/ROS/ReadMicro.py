@@ -8,7 +8,7 @@ class AudioStreamer:
     """
     Classe pour récupérer l'audio du robot QT en arrière-plan via ROS.
     """
-    def __init__(self, topic_name='/qt_respeaker_app/audio', queue_size=50):
+    def __init__(self, topic_name='/qt_respeaker_app/channel0', queue_size=50):
         # On initialise le nœud ROS s'il ne l'est pas déjà
         if not rospy.core.is_initialized():
             rospy.init_node('audio_client_local', anonymous=True)

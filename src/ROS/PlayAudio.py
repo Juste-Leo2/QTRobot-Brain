@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import rospy
 from std_msgs.msg import String
-from Transfer import FileTransfer # On importe notre outil
+try:
+    from src.ROS.Transfer import FileTransfer
+except:
+    from Transfer import FileTransfer
 
 class AudioController:
     def __init__(self):
