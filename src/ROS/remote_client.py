@@ -4,6 +4,8 @@ import time
 import sys
 import os
 import socket
+import numpy as np
+import cv2
 from src.ROS.Transfer import FileTransfer
 
 BRIDGE_URL = "http://127.0.0.1:5000"
@@ -12,43 +14,53 @@ AUDIO_PORT = 5001
 class RemoteRosClient:
     def __init__(self):
         self.transfer = FileTransfer()
+        # --- NETTOYAGE AUTOMATIQUE DU PORT 5000 ---
+        print("🧹 Nettoyage des anciens processus ROS...")
+        subprocess.run("fuser -k 5000/tcp", shell=True, stderr=subprocess.DEVNULL)
+        time.sleep(1) # Pause pour laisser le temps au système de fermer le port
+        
         self._ensure_server_running()
         self.audio_sock = None
 
     def _ensure_server_running(self):
-        try:
-            requests.get(f"{BRIDGE_URL}/status", timeout=1)
-            print("✅ Pont ROS Connecté.")
-            return
-        except:
-            print("⚠️ Démarrage du Pont ROS...")
-        
-        subprocess.run("fuser -k 5000/tcp", shell=True, stderr=subprocess.DEVNULL)
-        subprocess.run("fuser -k 5001/tcp", shell=True, stderr=subprocess.DEVNULL)
-        time.sleep(1)
-
+        # On tente de lancer le serveur
         script_path = os.path.join(os.getcwd(), "src", "ROS", "bridge_server.py")
+        print(f"🚀 Démarrage du Pont ROS : {script_path}")
+        
+        # On lance le serveur en arrière-plan
         subprocess.Popen(["/usr/bin/python3", script_path], stdout=sys.stdout, stderr=sys.stderr)
-
-        for _ in range(10):
+        
+        # On attend qu'il soit prêt
+        for i in range(10):
             try:
                 requests.get(f"{BRIDGE_URL}/status", timeout=1)
-                print("✅ Pont ROS Démarré !")
+                print("✅ Pont ROS Connecté !")
                 return
-            except: time.sleep(1)
-        print("❌ ECHEC connexion ROS.")
+            except: 
+                time.sleep(1)
+                print(f"⏳ Attente connexion... ({i+1}/10)")
+        
+        print("❌ ECHEC : Impossible de connecter le Pont ROS.")
 
     def _send(self, cmd, payload=""):
         try:
-            requests.post(f"{BRIDGE_URL}/command", json={"command": cmd, "payload": payload}, timeout=1.0)
+            requests.post(f"{BRIDGE_URL}/command", json={"command": cmd, "payload": payload}, timeout=0.5)
         except Exception as e:
-            print(f"❌ Erreur envoi {cmd}: {e}")
+            # On ignore les timeouts courts (normal pour les commandes rapides)
+            pass
 
-    def wakeup(self): self._send("wakeup")
+    # --- COMMANDES ---
+    def wakeup(self): 
+        print("🦾 Envoi commande Wakeup...")
+        self._send("wakeup")
+        time.sleep(2) # Attente que les moteurs s'allument
+
     def gesture(self, name): self._send("gesture", name)
     def emotion(self, name): self._send("emotion", name)
     def show_text(self, text): self._send("show_text", text)
-    def move_head(self, yaw, pitch): self._send("head", f"{yaw},{pitch}")
+    def move_head(self, yaw, pitch): 
+        # On envoie une string simple "0.5,0.2"
+        self._send("head", f"{yaw},{pitch}")
 
     def show_image(self, filename):
         if filename.startswith("QT/"):
@@ -63,6 +75,17 @@ class RemoteRosClient:
         elif os.path.exists(filename):
             remote_path = self.transfer.send(filename, "stream_audio")
             if remote_path: self._send("play", remote_path)
+
+    # --- VIDEO ---
+    def get_camera_frame(self):
+        try:
+            resp = requests.get(f"{BRIDGE_URL}/camera", timeout=0.5)
+            if resp.status_code == 200:
+                arr = np.frombuffer(resp.content, np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                return img
+        except: pass
+        return None
 
     # --- AUDIO MANAGEMENT ---
     def start_listening(self):
@@ -82,19 +105,14 @@ class RemoteRosClient:
             self.audio_sock.close(); self.audio_sock = None
 
     def clear_socket_buffer(self):
-        """VIDE LE BUFFER AUDIO POUR EVITER L'ECHO"""
         if not self.audio_sock: return
         try:
-            # On passe en mode non-bloquant pour lire tout ce qui traîne instantanément
             self.audio_sock.setblocking(0)
             while True:
                 data = self.audio_sock.recv(4096)
                 if not data: break
-        except BlockingIOError:
-            pass # Le buffer est vide, tout va bien
-        except Exception as e:
-            print(f"⚠️ Warning flush audio: {e}")
+        except BlockingIOError: pass
+        except Exception as e: print(f"⚠️ Warning flush audio: {e}")
         finally:
-            # On remet le mode bloquant avec timeout pour la suite
             self.audio_sock.setblocking(1)
             self.audio_sock.settimeout(2)

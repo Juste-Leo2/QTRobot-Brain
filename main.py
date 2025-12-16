@@ -27,13 +27,15 @@ from src.utils import (obtenir_heure_formatee, jouer_fichier_audio, redimensionn
 # 0. CONFIG & ARGUMENTS
 # ==========================================
 parser = argparse.ArgumentParser()
-parser.add_argument("--QT", action="store_true", help="Mode QT Robot (Headless + ROS)")
+parser.add_argument("--QT", action="store_true", help="Mode QT Robot (Active ROS + Bridge)")
+parser.add_argument("--no-ui", action="store_true", help="Désactive l'interface graphique (Headless)")
 parser.add_argument("--API", type=str, help="Clé API Google", default=None)
 parser.add_argument("--pytest", action="store_true", help="Lance les tests")
 parser.add_argument("--no-moove", action="store_true", help="Désactive les mouvements")
 args = parser.parse_args()
 
 IS_ROS_MODE = args.QT
+SHOW_UI = not args.no_ui
 API_KEY = args.API
 
 if args.pytest:
@@ -59,9 +61,12 @@ if IS_ROS_MODE:
     from src.ROS.remote_client import RemoteRosClient
     ros_client = RemoteRosClient()
     ros_client.wakeup() # Premier réveil
-else:
+
+if SHOW_UI:
     print("🖥️ Mode UI Desktop")
     from src.ui import UI
+else:
+    print("🚫 Mode Headless (Pas d'UI)")
 
 # ==========================================
 # 1. VARIABLES GLOBALES
@@ -79,13 +84,13 @@ IS_PROCESSING = False
 def log(msg):
     """Affiche les logs dans la console et dans l'UI si disponible"""
     print(f"[LOG] {msg}")
-    if ui and not IS_ROS_MODE:
+    if ui and SHOW_UI:
         try: ui.bottom_textbox.insert("end", msg + "\n"); ui.bottom_textbox.see("end")
         except: pass
 
 def update_ui_text(box_id, text):
     """Met à jour les zones de texte de l'UI de manière thread-safe"""
-    if IS_ROS_MODE or not ui: return
+    if not SHOW_UI or not ui: return
     target = {1: ui.textbox_1, 2: ui.textbox_2, 3: ui.textbox_3}.get(box_id)
     if target:
         ui.after(0, lambda: target.delete("1.0", "end")); ui.after(0, lambda: target.insert("end", text))
@@ -106,7 +111,7 @@ def parler(texte):
     if IS_ROS_MODE and ros_client:
         ros_client.play(AUDIO_OUTPUT)
     else:
-        # Mode UI : on joue le son localement
+        # Mode UI / PC Local
         jouer_fichier_audio(AUDIO_OUTPUT)
         
     return duration
@@ -148,24 +153,23 @@ def traiter_commande(user_text):
                     ros_client.show_text(display_content.replace("TEXT:", ""))
                 else:
                     ros_client.show_image(display_content)
-                time.sleep(1.0) # Petit temps pour l'affichage
+                time.sleep(1.0) 
 
             # 2. Mouvement
             if action_robot != "None" and not args.no_moove:
                 ros_client.gesture(action_robot)
                 time.sleep(0.5)
 
-            # 3. Vidage buffer audio avant de parler (pour éviter d'entendre le moteur)
+            # 3. Vidage buffer audio
             ros_client.clear_socket_buffer()
 
         # --- AUDIO (Pour TOUS les modes) ---
-        # Cette partie était mal indentée avant, empêchant l'audio en mode UI
         audio_duration = parler(response_text)
         
         # Attente pour ne pas écouter sa propre voix
         if IS_ROS_MODE:
             time.sleep(audio_duration + 0.5)
-            ros_client.clear_socket_buffer() # Nettoyage final
+            ros_client.clear_socket_buffer() 
 
     except Exception as e:
         log(f"❌ [ERREUR] {e}")
@@ -205,7 +209,7 @@ def pipeline_local(user_text):
         chat_history.append({"role": "user", "content": user_text})
         resp_text = get_llm_response(chat_history, url, headers)
     
-    # Agents Gesture/Display (Local seulement)
+    # Agents Gesture/Display (Local seulement pour la decision, execution ROS plus haut)
     act = "None"; disp = "None"
     if not args.no_moove:
         g = run_agent_3_gesture(user_text, resp_text, config)
@@ -217,7 +221,7 @@ def pipeline_local(user_text):
     return {"text": resp_text, "action": act, "display": disp}
 
 def action_voir():
-    if derniere_image is None: return "Rien (Caméra éteinte)."
+    if derniere_image is None: return "Rien (Caméra éteinte ou noire)."
     return analyser_image_via_api(derniere_image, config['llm_server_vision']['url']) or "Indéfini."
 
 # ==========================================
@@ -229,7 +233,6 @@ def ros_audio_gen():
     ros_client.start_listening()
     while not arret_programme:
         if IS_PROCESSING:
-            # On vide le buffer sans le traiter pendant le traitement
             try: ros_client.get_audio_chunk()
             except: pass
             time.sleep(0.05)
@@ -240,59 +243,116 @@ def ros_audio_gen():
 
 def thread_ecoute():
     """Thread principal d'écoute (VOSK)"""
-    # Si ROS -> Source audio ROS, sinon Micro local (None = défaut pyaudio)
     src = ros_audio_gen if IS_ROS_MODE else None
     print("🎤 Démarrage de l'écoute...")
     vosk.start_transcription(traiter_commande, audio_source_iterator=src)
 
 def thread_camera():
-    """Thread Caméra : Affichage UI + Head Tracking (ROS)"""
+    """Thread Caméra : Tracking Visage corrigé en DEGRÉS"""
     global webcam, derniere_image
-    webcam = cv2.VideoCapture(0)
-    if not webcam.isOpened():
-        print("❌ Erreur: Impossible d'ouvrir la webcam")
-        return
-        
-    head_yaw=0; head_pitch=0
     
-    while not arret_programme:
-        ret, frame = webcam.read()
-        if ret:
-            derniere_image = frame.copy()
+    # Init Webcam locale si pas ROS
+    if not IS_ROS_MODE:
+        webcam = cv2.VideoCapture(0)
+        if not webcam.isOpened():
+            print("❌ Erreur: Webcam locale introuvable")
+            return
             
-            # --- Partie ROS (Head Tracking) ---
-            if IS_ROS_MODE and ros_client and not args.no_moove and not IS_PROCESSING:
+    # --- VARIABLES DE TRACKING (En Degrés maintenant) ---
+    head_yaw = 0.0   
+    head_pitch = 0.0 
+    
+    # PARAMETRES EN DEGRES
+    # Si le robot va de -90 (droite) à +90 (gauche)
+    MAX_YAW = 80.0       
+    # Le pitch est souvent plus limité (-30 à +30)
+    MAX_PITCH_UP = -25.0
+    MAX_PITCH_DOWN = 25.0
+    
+    # Zone morte (en pixels)
+    DEADZONE = 30 
+    
+    # Vitesse de réaction (Gain)
+    GAIN_X = 0.05
+    GAIN_Y = 0.05
+
+    FREQ_TRACKING = 10  
+    frame_count = 0
+
+    while not arret_programme:
+        frame = None
+        
+        # Acquisition
+        if IS_ROS_MODE:
+            if ros_client: frame = ros_client.get_camera_frame()
+        else:
+            ret, tmp_frame = webcam.read()
+            if ret: frame = tmp_frame
+
+        if frame is None:
+            time.sleep(0.1)
+            continue
+
+        derniere_image = frame.copy()
+        frame_count += 1
+            
+        # TRACKING
+        if IS_ROS_MODE and ros_client and not args.no_moove and not IS_PROCESSING:
+            
+            if frame_count % FREQ_TRACKING == 0:
                 small = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
                 det = detect_faces(small)
+                
                 if det:
                     f = max(det, key=lambda x:x['confidence'])
-                    x,y,w,h = f['box']
-                    # Centre de l'image réduite (160x120 si source 640x480/2)
-                    ex = 160 - (x+w/2); ey = 120 - (y+h/2)
-                    if abs(ex)>20: head_yaw += ex*0.001
-                    if abs(ey)>20: head_pitch -= ey*0.001
-                    head_yaw = max(min(head_yaw,1.0),-1.0)
-                    head_pitch = max(min(head_pitch,0.3),-0.3)
-                    ros_client.move_head(round(head_yaw,2), round(head_pitch,2))
-            
-            # --- Partie UI (Mise à jour image) ---
-            if ui and not IS_ROS_MODE:
-                res = redimensionner_image_pour_ui(frame)
-                # Correction du bug "truth value of an array"
-                if res is not None:
-                    # Conversion couleur pour PIL (OpenCV est en BGR, PIL veut RGB)
-                    img_rgb = cv2.cvtColor(res, cv2.COLOR_BGR2RGB)
-                    ui.after(0, lambda i=Image.fromarray(img_rgb): ui.mettre_a_jour_image(i))
+                    x, y, w, h = f['box']
                     
-        time.sleep(0.04)
-    webcam.release()
+                    # Centre (320x240) -> 160, 120
+                    center_x = x + w / 2
+                    center_y = y + h / 2
+                    
+                    error_x = 160 - center_x
+                    error_y = 120 - center_y 
+                    
+                    move_needed = False
+
+                    # -- YAW (Degrés) --
+                    if abs(error_x) > DEADZONE:
+                        head_yaw += error_x * GAIN_X
+                        move_needed = True
+                    
+                    # -- PITCH (Degrés) --
+                    if abs(error_y) > DEADZONE:
+                        head_pitch -= error_y * GAIN_Y 
+                        move_needed = True
+
+                    # -- LIMITES (Clamping en degrés) --
+                    head_yaw = max(min(head_yaw, MAX_YAW), -MAX_YAW)
+                    head_pitch = max(min(head_pitch, MAX_PITCH_DOWN), MAX_PITCH_UP)
+
+                    if move_needed:
+                        # On envoie des entiers ou floats simples (ex: 25.5, -10.0)
+                        ros_client.move_head(round(head_yaw, 1), round(head_pitch, 1))
+
+        # UI Update
+        if SHOW_UI and ui:
+            res = redimensionner_image_pour_ui(frame)
+            if res is not None:
+                img_rgb = cv2.cvtColor(res, cv2.COLOR_BGR2RGB)
+                ui.after(0, lambda i=Image.fromarray(img_rgb): ui.mettre_a_jour_image(i))
+                    
+        time.sleep(0.04) 
+
+    if not IS_ROS_MODE and webcam:
+        webcam.release()
+
 
 def shutdown():
     global arret_programme; arret_programme = True
     print("🛑 Arrêt du système...")
     if server_manager: server_manager.stop()
     if IS_ROS_MODE and ros_client: ros_client.stop_listening()
-    if ui: ui.on_closing()
+    if SHOW_UI and ui: ui.on_closing()
     sys.exit(0)
 
 # ==========================================
@@ -300,8 +360,11 @@ def shutdown():
 # ==========================================
 if __name__ == "__main__":
     # Chargement Config
-    with open("config/config.yaml", "r", encoding='utf-8') as f: config = yaml.safe_load(f)
-    
+    try:
+        with open("config/config.yaml", "r", encoding='utf-8') as f: config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print("⚠️ Config non trouvée, assurez-vous d'être à la racine.")
+
     # Gestionnaire Serveur (si pas d'API Key)
     if not API_KEY:
         server_manager = LLMServerManager()
@@ -309,11 +372,8 @@ if __name__ == "__main__":
     else:
         api_handler = GoogleGeminiHandler(API_KEY)
     
-    # Initialisation Interface ou ROS
-    if IS_ROS_MODE:
-        ros_client = RemoteRosClient()
-        ros_client.wakeup()
-    else:
+    # Initialisation Interface
+    if SHOW_UI:
         ui = UI(); ui.protocol("WM_DELETE_WINDOW", shutdown)
         
     # Initialisation Modèles
@@ -324,11 +384,11 @@ if __name__ == "__main__":
     threading.Thread(target=thread_camera, daemon=True).start()
     threading.Thread(target=thread_ecoute, daemon=True).start()
     
-    if IS_ROS_MODE:
+    if SHOW_UI:
+        print("🚀 SYSTEME PRET (Interface Active)")
+        ui.mainloop()
+    else:
+        print("🚀 SYSTEME PRET (Mode Headless - Ctrl+C pour quitter)")
         try:
-            print("🚀 SYSTEME PRET (Mode ROS)")
             while True: time.sleep(1)
         except KeyboardInterrupt: shutdown()
-    else:
-        print("🚀 SYSTEME PRET (Mode UI)")
-        ui.mainloop()
