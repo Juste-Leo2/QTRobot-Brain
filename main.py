@@ -31,7 +31,7 @@ parser.add_argument("--QT", action="store_true", help="Mode QT Robot (Active ROS
 parser.add_argument("--no-ui", action="store_true", help="Désactive l'interface graphique (Headless)")
 parser.add_argument("--API", type=str, help="Clé API Google", default=None)
 parser.add_argument("--pytest", action="store_true", help="Lance les tests")
-parser.add_argument("--no-moove", action="store_true", help="Désactive les mouvements")
+parser.add_argument("--no-tools", action="store_true", help="Désactive les outils (Router) pour accélérer la réponse")
 args = parser.parse_args()
 
 IS_ROS_MODE = args.QT
@@ -50,9 +50,8 @@ if API_KEY:
     from src.processing.api_google import GoogleGeminiHandler
 else:
     print(f"🏠 MODE LOCAL")
-    from src.processing.chat import get_llm_response
+    from src.processing.chat import get_multimodal_response
     from src.processing.function import choose_tool
-    from src.processing.agents import run_agent_3_gesture, run_agent_4_display
 
 # Sélection du Frontend (ROS ou UI)
 ros_client = None
@@ -156,7 +155,7 @@ def traiter_commande(user_text):
                 time.sleep(1.0) 
 
             # 2. Mouvement
-            if action_robot != "None" and not args.no_moove:
+            if action_robot != "None":
                 ros_client.gesture(action_robot)
                 time.sleep(0.5)
 
@@ -180,8 +179,13 @@ def traiter_commande(user_text):
 
 def pipeline_api(user_text):
     """Gestion via API Google"""
-    tool = api_handler.router_api(user_text)
-    update_ui_text(2, f"Outil (API): {tool}")
+    
+    if args.no_tools:
+        tool = "None"
+        update_ui_text(2, "Outil (API): Désactivé")
+    else:
+        tool = api_handler.router_api(user_text)
+        update_ui_text(2, f"Outil (API): {tool}")
     
     tool_res = "None"
     if tool == "get_time": tool_res = obtenir_heure_formatee()
@@ -193,31 +197,37 @@ def pipeline_api(user_text):
     return fused
 
 def pipeline_local(user_text):
-    """Gestion via Serveur Local"""
+    """Gestion via Serveur Local - Pipeline JSON Optimisé"""
     url = config['llm_server']['url']; headers = config['llm_server']['headers']
     
-    tool = choose_tool(user_text, url, headers)
-    update_ui_text(2, f"Outil (Local): {tool}")
-    
-    resp_text = ""
-    if tool == "get_time": resp_text = obtenir_heure_formatee()
-    elif tool == "get_vision":
-        prompt = f"Vision: {action_voir()}. User: {user_text}"
-        chat_history.append({"role": "user", "content": prompt})
-        resp_text = get_llm_response(chat_history, url, headers)
+    # 1. Choix outil (Conditionnel)
+    tool = "None"
+    if args.no_tools:
+        update_ui_text(2, "Outil (Local): Désactivé")
     else:
-        chat_history.append({"role": "user", "content": user_text})
-        resp_text = get_llm_response(chat_history, url, headers)
+        tool = choose_tool(user_text, url, headers)
+        update_ui_text(2, f"Outil (Local): {tool}")
     
-    # Agents Gesture/Display (Local seulement pour la decision, execution ROS plus haut)
-    act = "None"; disp = "None"
-    if not args.no_moove:
-        g = run_agent_3_gesture(user_text, resp_text, config)
-        if g: act = g['name']
-        d = run_agent_4_display(user_text, resp_text, config)
-        if d: disp = d['content'] if d['type'] == 'image' else f"TEXT:{d['content']}"
+    # 2. Préparation du contexte
+    context_info = "None"
+    if tool == "get_time":
+        heure = obtenir_heure_formatee()
+        context_info = f"It is currently {heure}."
+    elif tool == "get_vision":
+        vision_desc = action_voir()
+        context_info = f"Visual context (User showed something): {vision_desc}"
     
+    # 3. Appel unique au LLM (Generation JSON)
+    response_dict = get_multimodal_response(chat_history, user_text, context_info, url, headers)
+    
+    resp_text = response_dict["Response"]
+    act = response_dict["action"]
+    disp = response_dict["display"]
+    
+    # 4. Mise à jour historique
+    chat_history.append({"role": "user", "content": user_text})
     chat_history.append({"role": "assistant", "content": resp_text})
+    
     return {"text": resp_text, "action": act, "display": disp}
 
 def action_voir():
@@ -251,31 +261,22 @@ def thread_camera():
     """Thread Caméra : Tracking Visage corrigé en DEGRÉS"""
     global webcam, derniere_image
     
-    # Init Webcam locale si pas ROS
     if not IS_ROS_MODE:
         webcam = cv2.VideoCapture(0)
         if not webcam.isOpened():
             print("❌ Erreur: Webcam locale introuvable")
             return
             
-    # --- VARIABLES DE TRACKING (En Degrés maintenant) ---
+    # --- VARIABLES DE TRACKING (En Degrés) ---
     head_yaw = 0.0   
     head_pitch = 0.0 
     
-    # PARAMETRES EN DEGRES
-    # Si le robot va de -90 (droite) à +90 (gauche)
     MAX_YAW = 80.0       
-    # Le pitch est souvent plus limité (-30 à +30)
     MAX_PITCH_UP = -25.0
     MAX_PITCH_DOWN = 25.0
-    
-    # Zone morte (en pixels)
     DEADZONE = 30 
-    
-    # Vitesse de réaction (Gain)
     GAIN_X = 0.05
     GAIN_Y = 0.05
-
     FREQ_TRACKING = 10  
     frame_count = 0
 
@@ -297,7 +298,7 @@ def thread_camera():
         frame_count += 1
             
         # TRACKING
-        if IS_ROS_MODE and ros_client and not args.no_moove and not IS_PROCESSING:
+        if IS_ROS_MODE and ros_client and not IS_PROCESSING:
             
             if frame_count % FREQ_TRACKING == 0:
                 small = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
@@ -307,7 +308,6 @@ def thread_camera():
                     f = max(det, key=lambda x:x['confidence'])
                     x, y, w, h = f['box']
                     
-                    # Centre (320x240) -> 160, 120
                     center_x = x + w / 2
                     center_y = y + h / 2
                     
@@ -316,22 +316,18 @@ def thread_camera():
                     
                     move_needed = False
 
-                    # -- YAW (Degrés) --
                     if abs(error_x) > DEADZONE:
                         head_yaw += error_x * GAIN_X
                         move_needed = True
                     
-                    # -- PITCH (Degrés) --
                     if abs(error_y) > DEADZONE:
                         head_pitch -= error_y * GAIN_Y 
                         move_needed = True
 
-                    # -- LIMITES (Clamping en degrés) --
                     head_yaw = max(min(head_yaw, MAX_YAW), -MAX_YAW)
                     head_pitch = max(min(head_pitch, MAX_PITCH_DOWN), MAX_PITCH_UP)
 
                     if move_needed:
-                        # On envoie des entiers ou floats simples (ex: 25.5, -10.0)
                         ros_client.move_head(round(head_yaw, 1), round(head_pitch, 1))
 
         # UI Update
