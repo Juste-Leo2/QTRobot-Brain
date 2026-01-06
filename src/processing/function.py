@@ -40,7 +40,7 @@ def choose_tool(user_query: str, server_url: str, headers: dict) -> str:
     
     payload = {
         "prompt": prompt,
-        "temperature": 0.0,
+        "temperature": 0.1,
         "n_predict": 10,
         "stop": [IM_END_TOKEN, "\n", "User:"]
     }
