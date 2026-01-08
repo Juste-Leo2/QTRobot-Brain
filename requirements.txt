@@ -18,7 +18,11 @@ Pillow
 requests
 
 #reconnaissance émotion
-#vide pour le moment
+--extra-index-url https://download.pytorch.org/whl/cpu
+emotiefflib
+torch==2.8.0
+torchvision
+onnxruntime
 
 #capteur entre QT et raspberry
 Flask

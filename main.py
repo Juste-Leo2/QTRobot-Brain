@@ -8,6 +8,7 @@ import argparse
 import subprocess
 import wave
 import contextlib
+import queue # <--- IMPORT CRITIQUE
 from PIL import Image
 import numpy as np
 
@@ -20,7 +21,8 @@ if sys.platform == "win32":
 from src.data_acquisition.vosk_function import VoskRecognizer
 from src.final_interaction.tts_piper import PiperTTS
 from src.processing.server import LLMServerManager
-from src.data_acquisition.mtcnn_function import detect_faces, draw_faces
+from src.data_acquisition.mtcnn_function import detect_faces, draw_faces, select_priority_face
+from src.data_acquisition.emotions import EmotionAnalyzer
 from src.utils import (obtenir_heure_formatee, jouer_fichier_audio, redimensionner_image_pour_ui, analyser_image_via_api)
 
 # ==========================================
@@ -32,7 +34,6 @@ parser.add_argument("--no-ui", action="store_true", help="Désactive l'interface
 parser.add_argument("--API", type=str, help="Clé API Google", default=None)
 parser.add_argument("--pytest", action="store_true", help="Lance les tests")
 parser.add_argument("--no-tools", action="store_true", help="Désactive les outils (Router) pour accélérer la réponse")
-# --- NOUVEAUX ARGUMENTS ---
 parser.add_argument("--name", type=str, default=None, help="Prénom du robot (Wake-word)")
 parser.add_argument("--JKT", action="store_true", help="Active la connexion avec la veste connectée")
 
@@ -41,9 +42,8 @@ args = parser.parse_args()
 IS_ROS_MODE = args.QT
 SHOW_UI = not args.no_ui
 API_KEY = args.API
-ROBOT_NAME = args.name.lower() if args.name else None # Normalisation minuscule
+ROBOT_NAME = args.name.lower() if args.name else None 
 
-# CONFIG RASPBERRY PI (A adapter si besoin ou mettre dans config.yaml)
 RPI_IP = "192.168.100.3"
 RPI_USER = "qt"
 RPI_PASS = "qtrobot"
@@ -56,7 +56,6 @@ if args.pytest:
     subprocess.run(cmd)
     sys.exit(0)
 
-# Sélection du Backend LLM
 if API_KEY:
     print(f"☁️ MODE API ACTIVÉ")
     from src.processing.api_google import GoogleGeminiHandler
@@ -65,13 +64,12 @@ else:
     from src.processing.chat import get_multimodal_response
     from src.processing.function import choose_tool
 
-# Sélection du Frontend (ROS ou UI)
 ros_client = None
 if IS_ROS_MODE:
     print("🤖 Mode ROS : Connexion Client...")
     from src.ROS.remote_client import RemoteRosClient
     ros_client = RemoteRosClient()
-    ros_client.wakeup() # Premier réveil
+    ros_client.wakeup() 
 
 if SHOW_UI:
     print("🖥️ Mode UI Desktop")
@@ -79,7 +77,6 @@ if SHOW_UI:
 else:
     print("🚫 Mode Headless (Pas d'UI)")
 
-# Import Gestionnaire Veste (Conditionnel)
 jacket_manager = None
 if args.JKT:
     print("🧥 Mode VESTE (JKT) Activé")
@@ -90,22 +87,30 @@ if args.JKT:
         sys.exit(1)
 
 # ==========================================
-# 1. VARIABLES GLOBALES
+# 1. VARIABLES GLOBALES & QUEUE
 # ==========================================
 ui = None; config = None; vosk = None; tts = None; server_manager = None
 webcam = None; derniere_image = None; arret_programme = False 
+emotion_analyzer = None 
 AUDIO_OUTPUT = "output.wav"
 chat_history = [] 
 api_handler = None 
-IS_PROCESSING = False 
-# --- SECURITE THREADS (Lock global pour TOUTES les commandes ROS) ---
+IS_PROCESSING = False
+
+# --- NOUVELLE ARCHITECTURE ---
+# File d'attente pour TOUTES les actions robot (First In, First Out)
+ros_queue = queue.Queue()
+# Lock pour l'accès bas niveau au socket (conflit Caméra vs Exécuteur)
 robot_action_lock = threading.Lock()
+# Timestamp de la dernière action LLM pour ignorer la veste
+last_llm_action_ts = 0 
+# Indique si l'exécuteur est en train de jouer un son (pour couper VOSK)
+IS_ROBOT_SPEAKING = False 
 
 # ==========================================
 # 2. FONCTIONS UTILITAIRES
 # ==========================================
 def log(msg):
-    """Affiche les logs dans la console et dans l'UI si disponible"""
     print(f"[LOG] {msg}")
     if ui and SHOW_UI:
         try: 
@@ -114,7 +119,6 @@ def log(msg):
         except: pass
 
 def update_ui_text(box_id, text):
-    """Met à jour les zones de texte de l'UI de manière thread-safe"""
     if not SHOW_UI or not ui: return
     target = {1: ui.textbox_1, 2: ui.textbox_2, 3: ui.textbox_3}.get(box_id)
     if target:
@@ -129,54 +133,107 @@ def get_wav_duration(file_path):
             return frames / float(rate)
     except: return 2.0
 
-def parler(texte):
-    """Synthétise et joue l'audio (ROS ou Local)"""
-    print(f"🔊 [TTS] {texte[:50]}...")
-    
-    # 1. On génère le fichier audio
-    tts.synthesize(texte, AUDIO_OUTPUT, speaker_id=0)
-    
-    # 2. On calcule la durée pour la pause
-    duration = get_wav_duration(AUDIO_OUTPUT)
-    
-    if IS_ROS_MODE and ros_client:
-        import os
-        abs_path = os.path.abspath(AUDIO_OUTPUT)
-        # --- PATCH: Protection de la commande audio ---
-        with robot_action_lock:
-            ros_client.play(abs_path)
-    else:
-        # Mode UI / PC Local
-        jouer_fichier_audio(AUDIO_OUTPUT)
-        
-    return duration
+def generate_audio_only(texte):
+    """Génère le fichier WAV sans le jouer."""
+    print(f"🔊 [TTS Génération] {texte[:30]}...")
+    try:
+        tts.synthesize(texte, AUDIO_OUTPUT, speaker_id=0)
+        return get_wav_duration(AUDIO_OUTPUT)
+    except Exception as e:
+        print(f"❌ Erreur TTS: {e}")
+        return 0
 
 # ==========================================
-# 3. PIPELINE PRINCIPAL
+# 3. THREAD EXÉCUTEUR (Le Chef d'Orchestre)
+# ==========================================
+def thread_ros_executor():
+    """
+    Consomme les tâches de la file d'attente une par une.
+    C'est le SEUL endroit qui envoie des commandes d'écriture au robot.
+    """
+    global IS_ROBOT_SPEAKING
+    print("⚙️ [EXECUTOR] Démarré.")
+    
+    while not arret_programme:
+        try:
+            # On attend une tâche (bloquant, timeout 1s pour vérifier l'arrêt)
+            task = ros_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
+            
+        type_action = task.get("type")
+        data = task.get("data")
+        
+        # --- EXÉCUTION SÉCURISÉE ---
+        with robot_action_lock:
+            try:
+                if IS_ROS_MODE and ros_client:
+                    
+                    if type_action == "gesture":
+                        ros_client.gesture(data)
+                        time.sleep(0.5) # Temps minimum pour le geste
+                        
+                    elif type_action == "emotion":
+                        ros_client.emotion(data)
+                        time.sleep(0.5) # Temps pour l'écran
+                        
+                    elif type_action == "text":
+                        ros_client.show_text(data)
+                        
+                    elif type_action == "image":
+                        ros_client.show_image(data)
+                        
+                    elif type_action == "audio":
+                        # data est le chemin du fichier wav
+                        import os
+                        abs_path = os.path.abspath(data)
+                        
+                        IS_ROBOT_SPEAKING = True # On signale qu'on parle
+                        ros_client.play(abs_path)
+                        
+                        # On attend la fin réelle de l'audio + marge
+                        duration = task.get("duration", 2.0)
+                        time.sleep(duration + 0.8)
+                        
+                        # Nettoyage buffer
+                        ros_client.clear_socket_buffer()
+                        IS_ROBOT_SPEAKING = False
+
+                else:
+                    # MODE PC LOCAL (Simulé)
+                    if type_action == "audio":
+                        IS_ROBOT_SPEAKING = True
+                        jouer_fichier_audio(data)
+                        IS_ROBOT_SPEAKING = False
+                        
+            except Exception as e:
+                print(f"❌ [EXECUTOR] Erreur lors de l'exécution : {e}")
+                IS_ROBOT_SPEAKING = False
+
+        ros_queue.task_done()
+
+# ==========================================
+# 4. PIPELINE PRINCIPAL (Producteur 1)
 # ==========================================
 def traiter_commande(user_text):
-    global chat_history, IS_PROCESSING
+    global chat_history, IS_PROCESSING, last_llm_action_ts
     if not user_text.strip(): return
     
-    # --- FILTRE WAKE-WORD (PRÉNOM) ---
+    # --- WAKE WORD ---
     if ROBOT_NAME:
         text_clean = user_text.strip().lower()
         if not text_clean.startswith(ROBOT_NAME):
             print(f"🔇 Ignoré (Attendu: '{ROBOT_NAME}', Reçu: '{text_clean.split()[0]}...')")
             return
-        
-        # On retire le prénom de la phrase
         user_text = user_text[len(ROBOT_NAME):].strip()
-        
-        if not user_text: # Si l'utilisateur dit juste "Robot"
-            return 
+        if not user_text: return 
             
     print(f"\n🎤 [USER] \"{user_text}\"")
     IS_PROCESSING = True
     update_ui_text(1, user_text)
 
     try:
-        # --- GENERATION LLM ---
+        # 1. LLM GENERATION
         if API_KEY and api_handler:
             result = pipeline_api(user_text)
         else:
@@ -186,54 +243,39 @@ def traiter_commande(user_text):
         action_robot = result["action"]
         display_content = result["display"]
         
-        # UI Update
         update_ui_text(3, response_text)
-        
         log(f"Action: {action_robot} | Display: {display_content}")
 
-        # --- ACTIONS PHYSIQUES (Seulement si ROS) ---
-        if IS_ROS_MODE and ros_client:
-            
-            # --- PATCH: Protection pendant l'animation ---
-            with robot_action_lock:
-                # 1. Ecran / Emotion
-                if display_content != "None":
-                    if display_content.startswith("QT/"):
-                        ros_client.emotion(display_content)
-                    elif "TEXT:" in display_content:
-                        ros_client.show_text(display_content.replace("TEXT:", ""))
-                    else:
-                        ros_client.show_image(display_content)
-                    time.sleep(1.0) 
-
-                # 2. Mouvement
-                if action_robot != "None":
-                    ros_client.gesture(action_robot)
-                    time.sleep(0.5)
-
-                # 3. Vidage buffer audio (partiel)
-                ros_client.clear_socket_buffer()
-
+        # 2. MISE EN FILE D'ATTENTE (QUEUE)
+        # On enregistre le timestamp pour bloquer la veste pendant 10s
+        last_llm_action_ts = time.time()
         
-        # --- AUDIO (Pour TOUS les modes) ---
-        audio_duration = parler(response_text)
-        
-        # Attente pour ne pas écouter sa propre voix
-        if IS_ROS_MODE:
-            time.sleep(audio_duration + 0.5)
-            # --- PATCH: Protection du nettoyage buffer final ---
-            with robot_action_lock:
-                if ros_client: ros_client.clear_socket_buffer() 
+        # A. Ecran / Emotion
+        if display_content != "None":
+            if display_content.startswith("QT/"):
+                ros_queue.put({"type": "emotion", "data": display_content})
+            elif "TEXT:" in display_content:
+                txt = display_content.replace("TEXT:", "")
+                ros_queue.put({"type": "text", "data": txt})
+            else:
+                ros_queue.put({"type": "image", "data": display_content})
+
+        # B. Geste
+        if action_robot != "None":
+            ros_queue.put({"type": "gesture", "data": action_robot})
+
+        # C. Audio (On génère d'abord, puis on file l'ordre de jouer)
+        duration = generate_audio_only(response_text)
+        ros_queue.put({"type": "audio", "data": AUDIO_OUTPUT, "duration": duration})
 
     except Exception as e:
         log(f"❌ [ERREUR] {e}")
         IS_PROCESSING = False
     
-    print("🟢 [PRET] Micro ouvert\n")
+    print("🟢 [PRET] Micro ouvert (Commandes en file d'attente)\n")
     IS_PROCESSING = False
 
 def pipeline_api(user_text):
-    """Gestion via API Google"""
     if args.no_tools:
         tool = "None"
         update_ui_text(2, "Outil (API): Désactivé")
@@ -251,11 +293,9 @@ def pipeline_api(user_text):
     return fused
 
 def pipeline_local(user_text):
-    """Gestion via Serveur Local - Pipeline JSON Optimisé"""
     url = config['llm_server']['url']
     headers = config['llm_server']['headers']
     
-    # 1. Choix outil (Conditionnel)
     tool = "None"
     if args.no_tools:
         update_ui_text(2, "Outil (Local): Désactivé")
@@ -263,7 +303,6 @@ def pipeline_local(user_text):
         tool = choose_tool(user_text, url, headers)
         update_ui_text(2, f"Outil (Local): {tool}")
     
-    # 2. Préparation du contexte
     context_info = "None"
     if tool == "get_time":
         heure = obtenir_heure_formatee()
@@ -272,14 +311,12 @@ def pipeline_local(user_text):
         vision_desc = action_voir()
         context_info = f"Visual context (User showed something): {vision_desc}"
     
-    # 3. Appel unique au LLM (Generation JSON)
     response_dict = get_multimodal_response(chat_history, user_text, context_info, url, headers)
     
     resp_text = response_dict["Response"]
     act = response_dict["action"]
     disp = response_dict["display"]
     
-    # 4. Mise à jour historique
     chat_history.append({"role": "user", "content": user_text})
     chat_history.append({"role": "assistant", "content": resp_text})
     
@@ -290,15 +327,17 @@ def action_voir():
     return analyser_image_via_api(derniere_image, config['llm_server_vision']['url']) or "Indéfini."
 
 # ==========================================
-# 4. THREADS (CAMERA, AUDIO, VESTE)
+# 5. THREADS (AUDIO INPUT, VESTE, CAMERA)
 # ==========================================
 def ros_audio_gen():
-    """Générateur audio pour ROS"""
+    """Ecoute audio ROS avec pause si le robot parle."""
     if not ros_client: return
     ros_client.start_listening()
     while not arret_programme:
-        if IS_PROCESSING:
-            try: ros_client.get_audio_chunk()
+        # Si le robot parle (via l'exécuteur) ou pense, on coupe l'oreille
+        # On vérifie aussi si la queue n'est pas vide (action en attente)
+        if IS_PROCESSING or IS_ROBOT_SPEAKING or not ros_queue.empty():
+            try: ros_client.get_audio_chunk() # On vide le buffer pour éviter le larsen
             except: pass
             time.sleep(0.05)
             continue
@@ -308,13 +347,12 @@ def ros_audio_gen():
     ros_client.stop_listening()
 
 def thread_ecoute():
-    """Thread principal d'écoute (VOSK)"""
     src = ros_audio_gen if IS_ROS_MODE else None
     print("🎤 Démarrage de l'écoute...")
     vosk.start_transcription(traiter_commande, audio_source_iterator=src)
 
 def thread_jacket():
-    """Thread gestion de la veste (Jacket)"""
+    """Thread Veste (Producteur 2)"""
     global chat_history, jacket_manager
     
     if not jacket_manager: return
@@ -330,40 +368,47 @@ def thread_jacket():
         action = jacket_manager.get_data(clear_after=True)
         
         if action:
-            print(f"⚡ [JKT] Geste reçu : {action}")
-            
-            # Reset de l'historique
-            chat_history = []
-            log(f"⚠️ Historique reset suite à : {action}")
-            
-            # Actions et Gestes
-            if action == "Tape":
-                msg_ui = "Aïe ! (Tape)"
-                geste_ros = "QT/angry" 
-            elif action == "Pincement":
-                msg_ui = "Ouille ! (Pincement)"
-                geste_ros = "QT/surprise" 
-            elif action == "Frottement":
-                msg_ui = "C'est doux (Frottement)"
-                geste_ros = "QT/happy" 
-            else:
-                msg_ui = f"Geste inconnu: {action}"
-                geste_ros = "QT/confused"
+            # 1. CHECK COOLDOWN (10s après action LLM)
+            time_since_llm = time.time() - last_llm_action_ts
+            if time_since_llm < 10.0:
+                print(f"🛡️ [JKT] Ignoré ({action}) - Priorité LLM active ({int(10-time_since_llm)}s restantes).")
+                continue
 
-            update_ui_text(3, msg_ui)
+            print(f"⚡ [JKT] Geste reçu : {action}")
+            chat_history = [] # Reset conversation
             
-            # Action ROS si active
-            if IS_ROS_MODE and ros_client:
-                # --- PATCH: Protection concurrence totale avec Audio/Camera ---
-                with robot_action_lock:
-                    ros_client.gesture(geste_ros)
-                
+            phrase = ""
+            geste = ""
+            
+            if action == "Tape":
+                geste = "QT/happy"
+                phrase = "Tu es incroyable !"
+            elif action == "Frottement":
+                geste = "QT/happy"
+                phrase = "C'est doux."
+            elif action == "Pincement":
+                geste = "QT/angry"
+                phrase = "Ça fait mal !"
+            else:
+                geste = "QT/confused"
+
+            update_ui_text(3, f"Veste: {action}")
+
+            # 2. MISE EN FILE D'ATTENTE (QUEUE)
+            ros_queue.put({"type": "emotion", "data": geste})
+            ros_queue.put({"type": "gesture", "data": geste})
+            
+            if phrase:
+                # Génération locale TTS (pour ne pas bloquer l'executor)
+                duration = generate_audio_only(phrase)
+                # Envoi ordre lecture
+                ros_queue.put({"type": "audio", "data": AUDIO_OUTPUT, "duration": duration})
+
         time.sleep(0.1)
     
     jacket_manager.stop()
 
 def thread_camera():
-    """Thread Caméra : Tracking Visage"""
     global webcam, derniere_image
     
     if not IS_ROS_MODE:
@@ -372,11 +417,12 @@ def thread_camera():
             print("❌ Erreur: Webcam locale introuvable")
             return
             
-    # Variables Tracking
     head_yaw = 0.0; head_pitch = 0.0 
     MAX_YAW = 80.0; MAX_PITCH_UP = -25.0; MAX_PITCH_DOWN = 25.0
     DEADZONE = 30; GAIN_X = 0.05; GAIN_Y = 0.05
     FREQ_TRACKING = 10; frame_count = 0
+
+    last_emotion_label = None; last_box = None; last_face_center = None 
 
     while not arret_programme:
         frame = None
@@ -392,14 +438,26 @@ def thread_camera():
         derniere_image = frame.copy()
         frame_count += 1
             
-        # TRACKING
-        if IS_ROS_MODE and ros_client and not IS_PROCESSING:
-            if frame_count % FREQ_TRACKING == 0:
-                small = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
-                det = detect_faces(small)
-                if det:
-                    f = max(det, key=lambda x:x['confidence'])
-                    x, y, w, h = f['box']
+        if frame_count % FREQ_TRACKING == 0:
+            small = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
+            all_faces = detect_faces(small) 
+            
+            center_small = None
+            if last_face_center:
+                center_small = (last_face_center[0] * 0.5, last_face_center[1] * 0.5)
+
+            priority_face, new_center_small = select_priority_face(all_faces, center_small)
+
+            if priority_face:
+                last_face_center = (new_center_small[0] * 2.0, new_center_small[1] * 2.0)
+                
+                if emotion_analyzer:
+                    emo, _, box = emotion_analyzer.process_emotion(frame, [priority_face], scale_factor=2.0)
+                    last_emotion_label = emo; last_box = box
+                
+                # Tracking Tête (Uniquement si queue vide pour éviter de saccader les gestes)
+                if IS_ROS_MODE and ros_client and ros_queue.empty() and not IS_ROBOT_SPEAKING:
+                    x, y, w, h = priority_face['box']
                     center_x = x + w / 2; center_y = y + h / 2
                     error_x = 160 - center_x; error_y = 120 - center_y 
                     move_needed = False
@@ -411,25 +469,35 @@ def thread_camera():
 
                     head_yaw = max(min(head_yaw, MAX_YAW), -MAX_YAW)
                     head_pitch = max(min(head_pitch, MAX_PITCH_DOWN), MAX_PITCH_UP)
+                    
                     if move_needed:
-                        # --- PATCH: Ne bouge la tête que si le canal est libre ---
+                        # Protection Non-Bloquante : Si l'executor utilise le socket, on saute.
                         if robot_action_lock.acquire(blocking=False):
                             try:
                                 ros_client.move_head(round(head_yaw, 1), round(head_pitch, 1))
                             finally:
                                 robot_action_lock.release()
 
-        # UI Update
+            else:
+                last_emotion_label = None; last_box = None; last_face_center = None 
+
+        # UI Dessin
+        if last_box:
+            x1, y1, x2, y2 = last_box
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            if last_emotion_label:
+                cv2.putText(frame, last_emotion_label, (x1, y1 - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
         if SHOW_UI and ui:
             res = redimensionner_image_pour_ui(frame)
             if res is not None:
-                img_rgb = cv2.cvtColor(res, cv2.COLOR_BGR2RGB)
+                img_rgb = res 
                 ui.after(0, lambda i=Image.fromarray(img_rgb): ui.mettre_a_jour_image(i))
                      
         time.sleep(0.04) 
 
     if not IS_ROS_MODE and webcam: webcam.release()
-
 
 def shutdown():
     global arret_programme; arret_programme = True
@@ -441,37 +509,36 @@ def shutdown():
     sys.exit(0)
 
 # ==========================================
-# 5. MAIN
+# 6. MAIN
 # ==========================================
 if __name__ == "__main__":
-    # Chargement Config
     try:
         with open("config/config.yaml", "r", encoding='utf-8') as f: config = yaml.safe_load(f)
     except FileNotFoundError:
         print("⚠️ Config non trouvée, assurez-vous d'être à la racine.")
 
-    # Gestionnaire Serveur (si pas d'API Key)
     if not API_KEY:
         server_manager = LLMServerManager()
         server_manager.start()
     else:
         api_handler = GoogleGeminiHandler(API_KEY)
 
-    # Initialisation Manager Veste (si argument JKT)
     if args.JKT:
         jacket_manager = RaspberryManager(RPI_IP, RPI_USER, RPI_PASS, RPI_SCRIPT, RPI_VENV)
     
-    # Initialisation Interface
     if SHOW_UI:
         ui = UI(); ui.protocol("WM_DELETE_WINDOW", shutdown)
         
-    # Initialisation Modèles
     vosk = VoskRecognizer(model_path=config['models']['stt_vosk']['fr'])
     tts = PiperTTS(model_path=config['models']['tts_piper']['fr_upmc'])
     
-    # Lancement Threads
+    emotion_analyzer = EmotionAnalyzer()
+
+    # Lancement des threads
+    threading.Thread(target=thread_ros_executor, daemon=True).start() # <-- LE CHEF D'ORCHESTRE
     threading.Thread(target=thread_camera, daemon=True).start()
     threading.Thread(target=thread_ecoute, daemon=True).start()
+    
     if args.JKT:
         threading.Thread(target=thread_jacket, daemon=True).start()
     
