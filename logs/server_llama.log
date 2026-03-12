@@ -355,3 +355,22 @@ prompt eval time =    2544.26 ms /    49 tokens (   51.92 ms per token,    19.26
       total time =    6088.48 ms /    74 tokens
 slot      release: id  2 | task 129 | stop processing: n_tokens = 73, truncated = 0
 srv  update_slots: all slots are idle
+srv  log_server_r: done request: GET /v1 127.0.0.1 404
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 1.000 (> 0.100 thold), f_keep = 0.671
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> ?top-p -> ?min-p -> ?xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 156 | processing task, is_child = 0
+slot update_slots: id  2 | task 156 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 49
+slot update_slots: id  2 | task 156 | n_past = 49, slot.prompt.tokens.size() = 73, seq_id = 2, pos_min = 72, n_swa = 1
+slot update_slots: id  2 | task 156 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+slot update_slots: id  2 | task 156 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 156 | prompt processing progress, n_tokens = 45, batch.n_tokens = 45, progress = 0.918367
+slot update_slots: id  2 | task 156 | n_tokens = 45, memory_seq_rm [45, end)
+slot init_sampler: id  2 | task 156 | init sampler, took 0.02 ms, tokens: text = 49, total = 49
+slot update_slots: id  2 | task 156 | prompt processing done, n_tokens = 49, batch.n_tokens = 4
+srv  log_server_r: done request: POST /v1/completions 127.0.0.1 200
+slot print_timing: id  2 | task 156 | 
+prompt eval time =    2624.77 ms /    49 tokens (   53.57 ms per token,    18.67 tokens per second)
+       eval time =    1835.49 ms /    12 tokens (  152.96 ms per token,     6.54 tokens per second)
+      total time =    4460.26 ms /    61 tokens
+slot      release: id  2 | task 156 | stop processing: n_tokens = 60, truncated = 0
+srv  update_slots: all slots are idle

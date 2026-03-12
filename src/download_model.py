@@ -138,8 +138,12 @@ def main():
     llm_text_url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf?download=true"
     
     if is_linux:
-        # 1. Trouver le chemin absolu du script bash (à la racine du projet)
-        # __file__ correspond à src/download_model.py, donc parent.parent est la racine
+        # 1. On déclare ces variables indispensables pour la suite du script
+        llama_exe_path = config['executables']['llama_server']['linux']
+        llama_bin_url = None  # None empêchera le téléchargement plus bas
+        llama_exe_name_in_zip = None
+
+        # 2. Trouver le chemin absolu du script bash
         project_root = Path(__file__).resolve().parent.parent
         script_path = project_root / "compile_llamacpp.sh"
 
@@ -149,15 +153,12 @@ def main():
             raise FileNotFoundError(f"❌ Script introuvable à l'emplacement : {script_path}")
 
         try:
-            # 2. Exécuter le script bash en se plaçant à la racine du projet (cwd)
+            # 3. Exécuter le script bash
             subprocess.run(["bash", str(script_path)], cwd=str(project_root), check=True)
             print("✅ Exécution du script de compilation terminée avec succès.")
 
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"❌ Le script a échoué avec le code erreur : {e.returncode}")
-
-        # 3. On désactive le téléchargement puisque le script a déjà tout fait
-        llama_bin_url = None
     else:
         llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b8287/llama-b8287-bin-win-cpu-x64.zip"
         llama_exe_path = config['executables']['llama_server']['win']
