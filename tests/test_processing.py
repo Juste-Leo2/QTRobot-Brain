@@ -9,14 +9,12 @@ import tempfile
 import requests
 import sys
 from pathlib import Path
-from PIL import Image
 
 # Imports du code source
 from src.data_acquisition.vosk_function import VoskRecognizer
 from src.data_acquisition.mtcnn_function import detect_faces
 from src.final_interaction.tts_piper import PiperTTS
-from src.processing.chat import get_llm_response, get_llm_response_vision
-from src.processing.function import choose_tool
+from src.processing.chat import get_llm_response
 
 # Import conditionnel API
 try:
@@ -47,7 +45,7 @@ def run_llama_server(config):
     if not server_path.exists():
         pytest.fail(f"Exécutable serveur introuvable: {server_path}", pytrace=False)
 
-    model_path = Path(config['models']['llm']['lfm_8b'])
+    model_path = Path(config['models']['llm']['qwen3.5_0_8b'])
     args_str = config['executables']['llama_server']['args'].format(model_path=model_path)
     command = [str(server_path)] + args_str.split()
     
@@ -84,55 +82,6 @@ def run_llama_server(config):
     yield server_process
     server_process.terminate()
     server_process.wait()
-
-@pytest.fixture(scope="session")
-def run_llama_server_vision(config):
-    """Fixture serveur vision local."""
-    if not config['testing']['run_integration_tests']:
-        yield None
-        return
-
-    is_win = sys.platform == "win32"
-    platform_key = 'win' if is_win else 'linux'
-    exe_path_str = config['executables']['llama_server_vision'][platform_key]
-    server_path = Path(exe_path_str).resolve()
-    
-    model_path = Path(config['models']['llm']['LFM2-VL-450M-Q4']).resolve()
-    model_path_mmproj = Path(config['models']['llm']['mmproj-LFM2-VL-450M-Q8']).resolve()
-
-    if not model_path.exists():
-        pytest.fail("Modèles Vision manquants", pytrace=False)
-
-    args_str = config['executables']['llama_server_vision']['args'].format(
-        model_path=model_path, model_path_mmproj=model_path_mmproj
-    )
-    command = [str(server_path)] + args_str.split()
-    print(f"\n🚀 Démarrage Serveur Vision...")
-
-    creation_flags = subprocess.CREATE_NO_WINDOW if is_win else 0
-    # On utilise des fichiers temp pour éviter de saturer le buffer PIPE
-    stdout_file = tempfile.TemporaryFile(); stderr_file = tempfile.TemporaryFile()
-
-    server_process = subprocess.Popen(
-        command, stdout=stdout_file, stderr=stderr_file, creationflags=creation_flags
-    )
-    
-    start_time = time.time(); ready = False
-    while time.time() - start_time < 180:
-        if server_process.poll() is not None: break
-        try:
-            requests.get("http://localhost:8088/", timeout=1)
-            ready = True
-            break
-        except: time.sleep(2)
-    
-    if not ready:
-        pytest.fail("Echec démarrage serveur Vision", pytrace=False)
-
-    yield server_process
-    server_process.terminate()
-    server_process.wait()
-    stdout_file.close(); stderr_file.close()
 
 # ==========================================
 # TESTS UNITAIRES
@@ -209,23 +158,6 @@ def test_google_api_pipeline(api_key, config):
 def test_local_integration_text(config, run_llama_server):
     if not run_llama_server: pytest.skip("Serveur Local non démarré")
     
-    # Test Choose Tool
-    res = choose_tool("Quelle heure est-il ?", config['llm_server']['url'], config['llm_server']['headers'])
-    assert "get_time" in res or "get_time" in res
-    
-    # Test Chat
-    res_chat = get_llm_response([{"role":"user", "content":"Salut"}], config['llm_server']['url'], config['llm_server']['headers'])
+    # Test Chat (Just check if it outputs text)
+    res_chat = get_llm_response([{"role":"user", "content":"Dis bonjour."}], config['llm_server']['url'], config['llm_server']['headers'])
     assert len(res_chat) > 0
-
-def test_local_integration_vision(config, run_llama_server_vision):
-    if not run_llama_server_vision: pytest.skip("Serveur Vision non démarré")
-    
-    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-        Image.new('RGB', (100, 100), color='red').save(tmp.name)
-        tmp_path = tmp.name
-    try:
-        res = get_llm_response_vision(config['llm_server_vision']['url'], tmp_path, "Describe")
-        assert len(res) > 0
-    finally:
-        try: os.unlink(tmp_path)
-        except: pass

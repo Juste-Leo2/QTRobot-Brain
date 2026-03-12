@@ -127,11 +127,6 @@ def extract_archive(archive_path: Path, extract_to: Path, expected_item: str, is
         return False
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--ci-mode', action='store_true', 
-                       help='Utilise le modèle LLM léger pour CI')
-    args = parser.parse_args()
-
     print("=" * 70)
     print(f"VÉRIFICATION ET TÉLÉCHARGEMENT DES MODÈLES IA [{sys.platform.upper()}]")
     print("=" * 70)
@@ -142,10 +137,6 @@ def main():
     # URLs
     llm_text_url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf?download=true"
     
-    if args.ci_mode:
-        print("🚀 Mode CI activé - Utilisation du modèle LLM léger")
-        llm_text_url = "https://huggingface.co/unsloth/Qwen3.5-0.5B-GGUF/resolve/main/Qwen3.5-0.5B-Q4_K_M.gguf?download=true"
-
     if is_linux:
         llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b8287/llama-b8287-bin-ubuntu-x64.tar.gz"
         llama_exe_path = config['executables']['llama_server']['linux']

@@ -45,7 +45,7 @@ jobs:
       - name: Download models (if cache missed)
         if: steps.cache-models.outputs.cache-hit != 'true'
         run: |
-          python src/download_model.py --ci-mode
+          python src/download_model.py
       
       - name: Run tests via Main
         env:
