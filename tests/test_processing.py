@@ -14,7 +14,7 @@ from pathlib import Path
 from src.data_acquisition.vosk_function import VoskRecognizer
 from src.data_acquisition.mtcnn_function import detect_faces
 from src.final_interaction.tts_piper import PiperTTS
-from src.processing.chat import get_llm_response
+from src.processing.agent_chat import get_chat_response
 
 # Import conditionnel API
 try:
@@ -159,5 +159,5 @@ def test_local_integration_text(config, run_llama_server):
     if not run_llama_server: pytest.skip("Serveur Local non démarré")
     
     # Test Chat (Just check if it outputs text)
-    res_chat = get_llm_response([{"role":"user", "content":"Dis bonjour."}], config['llm_server']['url'], config['llm_server']['headers'])
+    res_chat = get_chat_response([], "Dis bonjour.", "Contexte de test", config['llm_server']['url'])
     assert len(res_chat) > 0
