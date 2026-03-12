@@ -10,6 +10,7 @@ import yaml
 import subprocess
 import tempfile
 import zipfile
+import tarfile
 import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -63,47 +64,49 @@ def download_file(url: str, destination: Path, desc: str = "") -> bool:
         print(f"❌ Exception: {e}")
         return False
 
-def extract_zip(zip_path: Path, extract_to: Path, expected_item: str, is_directory: bool) -> bool:
+def extract_archive(archive_path: Path, extract_to: Path, expected_item: str, is_directory: bool) -> bool:
     """
-    Extrait une archive zip. 
+    Extrait une archive zip ou tar.gz. 
     Sur Linux, extrait TOUT le contenu du dossier binaire pour avoir les libs (.so).
     """
-    print(f"📦 Extraction de {zip_path.name}...")
+    print(f"📦 Extraction de {archive_path.name}...")
     
     try:
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            # Logique spéciale pour llama.cpp linux (souvent dans build/bin/)
-            bin_prefix = "build/bin/"
-            llama_linux_files = [f for f in zip_ref.namelist() if f.startswith(bin_prefix)]
-            
-            if llama_linux_files and sys.platform == "linux":
-                found_binary = False
-                print("   -> Extraction complète des binaires et libs Linux...")
+        bin_prefix = "build/bin/"
+        found_binary = False
+        
+        # Logique spéciale pour llama.cpp linux (souvent dans build/bin/ ou similaire)
+        # On extrait tout de toute façon car les libraries partagées sont nécessaires.
+        
+        if archive_path.suffix == '.zip':
+            with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                llama_linux_files = [f for f in zip_ref.namelist() if f.startswith(bin_prefix)]
                 
-                for file_info in llama_linux_files:
-                    file_name = file_info[len(bin_prefix):] # retire build/bin/
+                if llama_linux_files and sys.platform == "linux":
+                    print("   -> Extraction complète des binaires et libs Linux (zip)...")
+                    for file_info in llama_linux_files:
+                        file_name = file_info[len(bin_prefix):]
+                        if file_name: 
+                            source = zip_ref.open(file_info)
+                            target_path = extract_to / file_name
+                            target_path.parent.mkdir(parents=True, exist_ok=True)
+                            with open(target_path, 'wb') as target:
+                                shutil.copyfileobj(source, target)
+                            if file_name == expected_item:
+                                os.chmod(target_path, 0o755)
+                                found_binary = True
+                    if found_binary:
+                        print(f"   ✅ Binaire et Libs Linux extraits dans : {extract_to}")
+                        return True
+                else:
+                    zip_ref.extractall(extract_to)
                     
-                    # On extrait TOUT ce qui n'est pas un dossier vide
-                    if file_name: 
-                        source = zip_ref.open(file_info)
-                        target_path = extract_to / file_name
-                        target_path.parent.mkdir(parents=True, exist_ok=True)
-                        
-                        with open(target_path, 'wb') as target:
-                            shutil.copyfileobj(source, target)
-                        
-                        # Si c'est notre binaire principal, on le rend exécutable
-                        if file_name == expected_item:
-                            os.chmod(target_path, 0o755)
-                            found_binary = True
-                        # Les .so n'ont pas forcément besoin d'être +x, mais ça ne gène pas
-                
-                if found_binary:
-                    print(f"   ✅ Binaire et Libs Linux extraits dans : {extract_to}")
-                    return True
-
-            # Logique standard (Windows ou autres archives)
-            zip_ref.extractall(extract_to)
+        elif archive_path.name.endswith('.tar.gz'):
+             with tarfile.open(archive_path, 'r:gz') as tar_ref:
+                # Les tar.gz Linux llama.cpp ont souvent une structure différente selon les builds
+                # Extrayons tout. On cherchera le binaire ensuite.
+                print("   -> Extraction complète du tar.gz...")
+                tar_ref.extractall(extract_to)
 
         # Vérification finale
         full_path = extract_to / expected_item
@@ -116,7 +119,7 @@ def extract_zip(zip_path: Path, extract_to: Path, expected_item: str, is_directo
                 shutil.move(str(found[0]), str(full_path))
                 return True
         
-        print(f"❌ Échec extraction : {expected_item} non trouvé.")
+        print(f"❌ Échec extraction : {expected_item} non trouvé. Contenu extrait : {[p.name for p in extract_to.iterdir()]}")
         return False
 
     except Exception as e:
@@ -137,21 +140,18 @@ def main():
     is_linux = sys.platform == "linux"
     
     # URLs
-    llm_text_url = "https://huggingface.co/unsloth/LFM2-8B-A1B-GGUF/resolve/main/LFM2-8B-A1B-UD-Q3_K_XL.gguf?download=true"
+    llm_text_url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf?download=true"
     
     if args.ci_mode:
-        print("🚀 Mode CI activé - Utilisation du modèle LLM léger (350M)")
-        llm_text_url = "https://huggingface.co/LiquidAI/LFM2-350M-GGUF/resolve/main/LFM2-350M-Q4_K_M.gguf?download=true"
-
-    llm_vision_url = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/LFM2-VL-450M-Q4_0.gguf?download=true"
-    llm_mmproj_url = "https://huggingface.co/LiquidAI/LFM2-VL-450M-GGUF/resolve/main/mmproj-LFM2-VL-450M-Q8_0.gguf?download=true"
+        print("🚀 Mode CI activé - Utilisation du modèle LLM léger")
+        llm_text_url = "https://huggingface.co/unsloth/Qwen3.5-0.5B-GGUF/resolve/main/Qwen3.5-0.5B-Q4_K_M.gguf?download=true"
 
     if is_linux:
-        llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b6987/llama-b6987-bin-ubuntu-x64.zip"
+        llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b8287/llama-b8287-bin-ubuntu-x64.tar.gz"
         llama_exe_path = config['executables']['llama_server']['linux']
         llama_exe_name_in_zip = "llama-server" 
     else:
-        llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b6987/llama-b6987-bin-win-cpu-x64.zip"
+        llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b8287/llama-b8287-bin-win-cpu-x64.zip"
         llama_exe_path = config['executables']['llama_server']['win']
         llama_exe_name_in_zip = "llama-server.exe"
 
@@ -159,10 +159,8 @@ def main():
         (config['models']['stt_vosk']['fr'], "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip", "zip", "VOSK FR", True),
         (config['models']['tts_piper']['fr_upmc'], "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true", "file", "Piper TTS Model", False),
         (str(config['models']['tts_piper']['fr_upmc']) + ".json", "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx.json?download=true", "file", "Piper TTS Config", False),
-        (config['models']['llm']['lfm_8b'], llm_text_url, "file", "LLM Text Main", False),
-        (config['models']['llm']['LFM2-VL-450M-Q4'], llm_vision_url, "file", "LLM Vision Base", False),
-        (config['models']['llm']['mmproj-LFM2-VL-450M-Q8'], llm_mmproj_url, "file", "LLM Vision Projector", False),
-        (llama_exe_path, llama_bin_url, "zip", "Llama Server Binary", False),
+        (config['models']['llm']['qwen3.5_0_8b'], llm_text_url, "file", "LLM Main Model", False),
+        (llama_exe_path, llama_bin_url, "archive", "Llama Server Binary", False),
     ]
 
     print(f"--- Vérification des {len(models_to_check)} fichiers requis ---")
@@ -179,8 +177,9 @@ def main():
             if dl_type == "file":
                 download_file(url, full_dest_path, desc)
             else:
-                zip_dest = Path(temp_dir) / "temp.zip"
-                if download_file(url, zip_dest, desc):
+                archive_name = "temp.zip" if "zip" in url else "temp.tar.gz"
+                archive_dest = Path(temp_dir) / archive_name
+                if download_file(url, archive_dest, desc):
                     extract_dir = PROJECT_ROOT / Path(model_path).parent
                     
                     if "Llama Server" in desc:
@@ -188,7 +187,7 @@ def main():
                     else:
                         item_to_extract = Path(model_path).name
                         
-                    extract_zip(zip_dest, extract_dir, item_to_extract, is_dir)
+                    extract_archive(archive_dest, extract_dir, item_to_extract, is_dir)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

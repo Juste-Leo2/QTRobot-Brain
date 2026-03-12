@@ -186,7 +186,7 @@ def test_google_api_pipeline(api_key, config):
         # A. Test Router
         tool = handler.router_api("Quelle heure est-il ?")
         print(f"   👉 Router -> {tool}")
-        assert tool in ["get_time", "None", "get_vision"]
+        assert tool in ["get_time", "None"]
 
         # B. Test Réponse Fusionnée
         fused = handler.generate_fused_response(
@@ -211,7 +211,7 @@ def test_local_integration_text(config, run_llama_server):
     
     # Test Choose Tool
     res = choose_tool("Quelle heure est-il ?", config['llm_server']['url'], config['llm_server']['headers'])
-    assert "time" in res or "get_time" in res
+    assert "get_time" in res or "get_time" in res
     
     # Test Chat
     res_chat = get_llm_response([{"role":"user", "content":"Salut"}], config['llm_server']['url'], config['llm_server']['headers'])

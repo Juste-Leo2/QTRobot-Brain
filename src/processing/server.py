@@ -5,11 +5,11 @@ import yaml
 import os
 import sys
 from pathlib import Path
+import shlex
 
 class LLMServerManager:
     def __init__(self, config_path="config/config.yaml"):
         self.process_text = None
-        self.process_vision = None
         self.config = self._load_config(config_path)
         
         # Création du dossier logs s'il n'existe pas
@@ -25,15 +25,9 @@ class LLMServerManager:
         return Path(path_str).absolute()
 
     def start(self):
-        print("🚀 Initialisation des serveurs IA...")
+        print("🚀 Initialisation du serveur IA...")
         ok_text = self._start_server_text()
-        
-        # On tente la vision seulement si le texte est OK
-        ok_vision = False
-        if ok_text:
-            ok_vision = self._start_server_vision()
-        
-        return ok_text and ok_vision
+        return ok_text
 
     def _check_binary_deps(self, exe_path):
         if sys.platform != 'linux': return
@@ -42,40 +36,19 @@ class LLMServerManager:
 
     def _start_server_text(self):
         exe_path = self._get_executable_path('llama_server')
+        model_path = Path(self.config['models']['llm']['qwen3.5_0_8b']).resolve()
         
-        # --- CORRECTION ICI : .resolve() pour avoir le chemin ABSOLU ---
-        # Cela évite l'erreur "file not found" quand le CWD change
-        model_path = Path(self.config['models']['llm']['lfm_8b']).resolve()
-        
-        print(f"   -> Démarrage Llama Texte (8084)...")
+        print(f"   -> Démarrage Llama Server (8084)...")
         print(f"      Modèle : {model_path}")
 
         args_template = self.config['executables']['llama_server']['args']
         cmd_args = args_template.format(model_path=str(model_path))
+        
         full_cmd = [str(exe_path)] + cmd_args.split()
 
-        self.process_text = self._launch_process(full_cmd, "server_text")
-        return self._wait_for_url(self.config['llm_server']['url'], self.process_text)
+        self.process_text = self._launch_process(full_cmd, "server_llama")
+        return self._wait_for_url("http://localhost:8084/v1/models", self.process_text)
 
-    def _start_server_vision(self):
-        exe_path = self._get_executable_path('llama_server_vision')
-        
-        # --- CORRECTION ICI AUSSI ---
-        model_path = Path(self.config['models']['llm']['LFM2-VL-450M-Q4']).resolve()
-        mmproj_path = Path(self.config['models']['llm']['mmproj-LFM2-VL-450M-Q8']).resolve()
-        
-        print(f"   -> Démarrage Llama Vision (8088)...")
-        
-        args_template = self.config['executables']['llama_server_vision']['args']
-        cmd_args = args_template.format(
-            model_path=str(model_path),
-            model_path_mmproj=str(mmproj_path)
-        )
-        full_cmd = [str(exe_path)] + cmd_args.split()
-
-        self.process_vision = self._launch_process(full_cmd, "server_vision")
-        base_url = "http://localhost:8088/health" 
-        return self._wait_for_url(base_url, self.process_vision)
 
     def _launch_process(self, command, name):
         creation_flags = 0
@@ -136,6 +109,16 @@ class LLMServerManager:
         return False
 
     def stop(self):
-        print("🛑 Arrêt des serveurs...")
-        if self.process_text: self.process_text.kill()
-        if self.process_vision: self.process_vision.kill()
+        print("🛑 Arrêt du serveur...")
+        if self.process_text: 
+            try:
+                self.process_text.kill()
+            except Exception:
+                pass
+                
+        # S'assurer que le processus est bien tué sous Windows
+        if os.name == 'nt':
+            try:
+                subprocess.run(['taskkill', '/F', '/IM', 'llama-server.exe', '/T'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass

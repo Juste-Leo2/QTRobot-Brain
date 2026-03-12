@@ -13,12 +13,13 @@ class VoskRecognizer:
             print(f"ERREUR Chargement Vosk: {e}")
             raise
 
-    def start_transcription(self, callback_function, audio_source_iterator=None):
+    def start_transcription(self, callback_function, audio_source_iterator=None, pause_checker=None):
         """
         Démarre la transcription.
         :param callback_function: Fonction appelée quand du texte est détecté.
         :param audio_source_iterator: (Optionnel) Un itérateur qui yield des bytes d'audio (ex: pour ROS).
                                       Si None, utilise le micro local via PyAudio.
+        :param pause_checker: (Optionnel) Fonction retournant True si on doit ignorer l'audio.
         """
         recognizer = KaldiRecognizer(self.model, 16000)
         
@@ -45,6 +46,10 @@ class VoskRecognizer:
                 
                 while True:
                     data = stream.read(4096, exception_on_overflow=False)
+                    
+                    if pause_checker and pause_checker():
+                        continue
+                        
                     if recognizer.AcceptWaveform(data):
                         result = json.loads(recognizer.Result())
                         text = result.get("text", "")

@@ -37,55 +37,22 @@ def redimensionner_image_pour_ui(frame, target_width=800):
     except Exception:
         return None
 
-def analyser_image_via_api(image, url_api):
+def encodage_image_base64_pour_api(image):
     """
-    Prend une image brute (OpenCV), la prépare (resize/base64) 
-    et l'envoie à l'API Vision (Liquid AI ou autre).
-    Retourne la description textuelle ou None en cas d'erreur.
+    Prend une image brute (OpenCV), la redimensionne légèrement 
+    pour optimiser les tailles Base64, et l'encode pour la passer
+    aux modèles multimodaux via API.
     """
     if image is None:
         return None
 
     try:
-        # 1. Redimensionnement Optimisé pour l'inférence (400x200)
-        img_inference = cv2.resize(image, (400, 200))
-        
-        # 2. Encodage Base64
+        # Redimensionnement Optimisé pour l'inférence
+        img_inference = cv2.resize(image, (640, 480))
         _, buffer = cv2.imencode('.jpg', img_inference)
         img_base64 = base64.b64encode(buffer).decode('utf-8')
-        
-        # 3. Préparation Payload
-        system_prompt = "You are a helpful multimodal assistant by Liquid AI."
-        user_prompt = "ONE SHORT SENTENCE GENERAL description of the image above."
-
-        payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_base64}"}},
-                        {"type": "text", "text": user_prompt}
-                    ]
-                }
-            ],
-            "temperature": 0.1,       
-            "min_p": 0.15,            
-            "repeat_penalty": 1.05,   
-            "max_tokens": 256,
-            "stream": False
-        }
-
-        # 4. Envoi requête
-        response = requests.post(url_api, json=payload, timeout=45)
-        
-        if response.status_code == 200:
-            content = response.json()['choices'][0]['message']['content']
-            return content.replace("<|im_end|>", "").strip()
-        else:
-            print(f"[UTILS] Erreur API Vision: {response.status_code}")
-            return None
+        return img_base64
 
     except Exception as e:
-        print(f"[UTILS] Exception Vision: {e}")
+        print(f"[UTILS] Exception Encodage Vision: {e}")
         return None

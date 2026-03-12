@@ -23,7 +23,7 @@ from src.final_interaction.tts_piper import PiperTTS
 from src.processing.server import LLMServerManager
 from src.data_acquisition.mtcnn_function import detect_faces, draw_faces, select_priority_face
 from src.data_acquisition.emotions import EmotionAnalyzer
-from src.utils import (obtenir_heure_formatee, jouer_fichier_audio, redimensionner_image_pour_ui, analyser_image_via_api)
+from src.utils import (obtenir_heure_formatee, jouer_fichier_audio, redimensionner_image_pour_ui)
 
 # ==========================================
 # 0. CONFIG & ARGUMENTS
@@ -61,8 +61,9 @@ if API_KEY:
     from src.processing.api_google import GoogleGeminiHandler
 else:
     print(f"🏠 MODE LOCAL")
-    from src.processing.chat import get_multimodal_response
-    from src.processing.function import choose_tool
+    from src.processing.agent_chat import get_chat_response
+    from src.processing.agent_fonction import choose_tool
+    from src.processing.agent_animation import get_animation
 
 ros_client = None
 if IS_ROS_MODE:
@@ -285,7 +286,6 @@ def pipeline_api(user_text):
     
     tool_res = "None"
     if tool == "get_time": tool_res = obtenir_heure_formatee()
-    elif tool == "get_vision": tool_res = f"Vision: {action_voir()}"
     
     fused = api_handler.generate_fused_response(user_text, chat_history, tool_res, config)
     chat_history.append({"role": "user", "content": user_text})
@@ -294,37 +294,34 @@ def pipeline_api(user_text):
 
 def pipeline_local(user_text):
     url = config['llm_server']['url']
-    headers = config['llm_server']['headers']
     
     tool = "None"
     if args.no_tools:
         update_ui_text(2, "Outil (Local): Désactivé")
     else:
-        tool = choose_tool(user_text, url, headers)
+        tool = choose_tool(user_text, url)
         update_ui_text(2, f"Outil (Local): {tool}")
     
-    context_info = "None"
+    context_info = ""
+    
     if tool == "get_time":
         heure = obtenir_heure_formatee()
         context_info = f"It is currently {heure}."
-    elif tool == "get_vision":
-        vision_desc = action_voir()
-        context_info = f"Visual context (User showed something): {vision_desc}"
+            
+    # 1. Pipeline Chat (Texte)
+    resp_text = get_chat_response(chat_history, user_text, context_info, url)
     
-    response_dict = get_multimodal_response(chat_history, user_text, context_info, url, headers)
-    
-    resp_text = response_dict["Response"]
-    act = response_dict["action"]
-    disp = response_dict["display"]
+    # 2. Pipeline Animation (JSON)
+    anim_dict = get_animation(resp_text, url)
+    act = anim_dict["action"]
+    disp = anim_dict["display"]
     
     chat_history.append({"role": "user", "content": user_text})
     chat_history.append({"role": "assistant", "content": resp_text})
     
     return {"text": resp_text, "action": act, "display": disp}
 
-def action_voir():
-    if derniere_image is None: return "Rien (Caméra éteinte ou noire)."
-    return analyser_image_via_api(derniere_image, config['llm_server_vision']['url']) or "Indéfini."
+
 
 # ==========================================
 # 5. THREADS (AUDIO INPUT, VESTE, CAMERA)
@@ -346,10 +343,13 @@ def ros_audio_gen():
         yield chunk if chunk else time.sleep(0.01)
     ros_client.stop_listening()
 
+def should_pause_listening():
+    return IS_PROCESSING or IS_ROBOT_SPEAKING or not ros_queue.empty()
+
 def thread_ecoute():
     src = ros_audio_gen if IS_ROS_MODE else None
     print("🎤 Démarrage de l'écoute...")
-    vosk.start_transcription(traiter_commande, audio_source_iterator=src)
+    vosk.start_transcription(traiter_commande, audio_source_iterator=src, pause_checker=should_pause_listening)
 
 def thread_jacket():
     """Thread Veste (Producteur 2)"""

@@ -26,7 +26,6 @@ class GoogleGeminiHandler:
         prompt = (
             "Analyze the user request and return ONLY the tool name.\n"
             "TOOLS:\n"
-            "- get_vision: User wants to see/describe an image.\n"
             "- get_time: User asks for time/date.\n"
             "- None: Normal conversation.\n\n"
             f"User Request: {user_text}\n"
@@ -39,7 +38,7 @@ class GoogleGeminiHandler:
                 contents=prompt
             )
             result = response.text.strip()
-            for tool in ["get_vision", "get_time", "None"]:
+            for tool in ["get_time", "None"]:
                 if tool in result: return tool
             return "None"
         except Exception as e:

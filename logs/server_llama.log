@@ -1,0 +1,14 @@
+load_backend: loaded RPC backend from E:\Projet_QT_V3\QTRobot-Brain\models\llama_cpp\ggml-rpc.dll
+load_backend: loaded CPU backend from E:\Projet_QT_V3\QTRobot-Brain\models\llama_cpp\ggml-cpu-haswell.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 8287 (acb7c7906) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 6, n_threads_batch = 6, total_threads = 12
+
+system_info: n_threads = 6 (n_threads_batch = 6) / 12 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+Running without SSL
+init: using 11 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'E:\Projet_QT_V3\QTRobot-Brain\models\llm\Qwen3.5-0.8B-UD-Q4_K_XL.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
