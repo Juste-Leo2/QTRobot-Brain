@@ -4,7 +4,7 @@
 set -e
 
 # LA VERSION CIBLE (Celle que tu m'as donnée)
-TARGET_VERSION="b6987"
+TARGET_VERSION="b8287"
 
 echo "🚀 COMPILATION CIBLÉE LLAMA.CPP (Version : $TARGET_VERSION)"
 echo "------------------------------------------------------------"
@@ -94,4 +94,3 @@ echo "   ✅ llama-server-vision restauré."
 
 echo "------------------------------------------------------------"
 echo "🎉 SUCCÈS ! Tu es maintenant sur la version $TARGET_VERSION."
-echo "   Tu peux relancer : python3 main.py --QT"
