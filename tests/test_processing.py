@@ -22,6 +22,11 @@ try:
 except ImportError:
     GoogleGeminiHandler = None
 
+try:
+    from src.processing.api_openrouter import OpenRouterHandler
+except ImportError:
+    OpenRouterHandler = None
+
 # ==========================================
 # FIXTURES SERVEURS (RESTENT ICI)
 # ==========================================
@@ -150,6 +155,45 @@ def test_google_api_pipeline(api_key, config):
 
     except Exception as e:
         pytest.fail(f"❌ Erreur Test API: {e}")
+
+# ==========================================
+# TEST API OPENROUTER
+# ==========================================
+
+def test_openrouter_api_pipeline(oapi_key, config):
+    """
+    Test complet de l'API OpenRouter.
+    Doit être SKIP si pas de clé.
+    """
+    if not oapi_key:
+        pytest.skip("⚠️ Pas de clé OAPI fournie (--oapi-key 'KEY'). Test OpenRouter ignoré.")
+    
+    if OpenRouterHandler is None:
+        pytest.fail("❌ Import de src.processing.api_openrouter impossible.")
+
+    print(f"\n☁️ [TEST] Validation API OpenRouter...")
+    
+    try:
+        handler = OpenRouterHandler(oapi_key)
+        
+        # A. Test Router
+        tool = handler.router_api("Quelle heure est-il ?")
+        print(f"   👉 Router -> {tool}")
+        assert tool in ["get_time", "None"]
+
+        # B. Test Réponse Fusionnée
+        fused = handler.generate_fused_response(
+            "Fais coucou et montre un chat.", [], "None", config
+        )
+        print(f"   👉 Fusion -> Text: {len(fused['text'])} chars | Action: {fused['action']} | Display: {fused['display']}")
+
+        assert "text" in fused
+        assert "action" in fused
+        assert "display" in fused
+        assert len(fused["text"]) > 0
+
+    except Exception as e:
+        pytest.fail(f"❌ Erreur Test OpenRouter: {e}")
 
 # ==========================================
 # TESTS LOCAUX (INTEGRATION)

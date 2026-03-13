@@ -32,6 +32,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--QT", action="store_true", help="Mode QT Robot (Active ROS + Bridge)")
 parser.add_argument("--no-ui", action="store_true", help="Désactive l'interface graphique (Headless)")
 parser.add_argument("--API", type=str, help="Clé API Google", default=None)
+parser.add_argument("--OAPI", type=str, help="Clé API OpenRouter", default=None)
 parser.add_argument("--pytest", action="store_true", help="Lance les tests")
 parser.add_argument("--no-tools", action="store_true", help="Désactive les outils (Router) pour accélérer la réponse")
 parser.add_argument("--name", type=str, default=None, help="Prénom du robot (Wake-word)")
@@ -42,6 +43,7 @@ args = parser.parse_args()
 IS_ROS_MODE = args.QT
 SHOW_UI = not args.no_ui
 API_KEY = args.API
+OAPI_KEY = args.OAPI
 ROBOT_NAME = args.name.lower() if args.name else None 
 
 RPI_IP = "192.168.100.3"
@@ -53,12 +55,16 @@ RPI_VENV = "/home/qt/Documents/.venv/bin/activate"
 if args.pytest:
     cmd = [sys.executable, "-m", "pytest", "-v"]
     if API_KEY: cmd.append(f"--api-key={API_KEY}")
+    if OAPI_KEY: cmd.append(f"--oapi-key={OAPI_KEY}")
     subprocess.run(cmd)
     sys.exit(0)
 
 if API_KEY:
-    print(f"☁️ MODE API ACTIVÉ")
+    print(f"☁️ MODE API GOOGLE ACTIVÉ")
     from src.processing.api_google import GoogleGeminiHandler
+elif OAPI_KEY:
+    print(f"☁️ MODE API OPENROUTER ACTIVÉ")
+    from src.processing.api_openrouter import OpenRouterHandler
 else:
     print(f"🏠 MODE LOCAL")
     from src.processing.agent_chat import get_chat_response
@@ -235,7 +241,7 @@ def traiter_commande(user_text):
 
     try:
         # 1. LLM GENERATION
-        if API_KEY and api_handler:
+        if (API_KEY or OAPI_KEY) and api_handler:
             result = pipeline_api(user_text)
         else:
             result = pipeline_local(user_text)
@@ -517,11 +523,13 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print("⚠️ Config non trouvée, assurez-vous d'être à la racine.")
 
-    if not API_KEY:
+    if API_KEY:
+        api_handler = GoogleGeminiHandler(API_KEY)
+    elif OAPI_KEY:
+        api_handler = OpenRouterHandler(OAPI_KEY)
+    else:
         server_manager = LLMServerManager()
         server_manager.start()
-    else:
-        api_handler = GoogleGeminiHandler(API_KEY)
 
     if args.JKT:
         jacket_manager = RaspberryManager(RPI_IP, RPI_USER, RPI_PASS, RPI_SCRIPT, RPI_VENV)

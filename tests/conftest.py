@@ -5,14 +5,20 @@ from pathlib import Path
 
 # --- 1. AJOUT DE L'OPTION CLI ---
 def pytest_addoption(parser):
-    """Permet à Pytest de reconnaître l'argument --api-key"""
+    """Permet à Pytest de reconnaître les arguments --api-key et --oapi-key"""
     parser.addoption("--api-key", action="store", default=None, help="Clé API Google Gemini")
+    parser.addoption("--oapi-key", action="store", default=None, help="Clé API OpenRouter")
 
 # --- 2. FIXTURES GLOBALES ---
 @pytest.fixture
 def api_key(request):
     """Récupère la valeur de --api-key"""
     return request.config.getoption("--api-key")
+
+@pytest.fixture
+def oapi_key(request):
+    """Récupère la valeur de --oapi-key"""
+    return request.config.getoption("--oapi-key")
 
 @pytest.fixture(scope="session")
 def config():
