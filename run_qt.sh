@@ -30,10 +30,10 @@ fi
 # C'est l'équivalent de "uv run" mais plus direct ici.
 
 echo "Lancement du telechargement des modeles..."
-python src/download_model.py --ci-mode
+python src/download_model.py
 
 echo "Lancement de l'application principale..."
-python main.py
+python main.py --QT --JKT
 
 # 4. Nettoyage
 echo "Fermeture..."

@@ -8,6 +8,7 @@ def choose_tool(user_query: str, server_url: str) -> str:
         "- None: Conversational request.\n\n"
         "Return ONLY the tool name."
         "example: what time is it? -> get_time"
+        "example: Quelle heure est t'il ? -> get_time"
     )
 
     messages = [
