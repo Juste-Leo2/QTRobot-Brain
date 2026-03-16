@@ -103,6 +103,8 @@ AUDIO_OUTPUT = "output.wav"
 chat_history = [] 
 api_handler = None 
 IS_PROCESSING = False
+current_emotion = "Neutre"
+current_haptic_action = "Rien"
 
 # --- NOUVELLE ARCHITECTURE ---
 # File d'attente pour TOUTES les actions robot (First In, First Out)
@@ -299,6 +301,7 @@ def pipeline_api(user_text):
     return fused
 
 def pipeline_local(user_text):
+    global current_haptic_action
     url = config['llm_server']['url']
     
     tool = "None"
@@ -307,15 +310,13 @@ def pipeline_local(user_text):
     else:
         tool = choose_tool(user_text, url)
         update_ui_text(2, f"Outil (Local): {tool}")
-    
-    context_info = ""
-    
-    if tool == "get_time":
-        heure = obtenir_heure_formatee()
-        context_info = f"It is currently {heure}."
             
     # 1. Pipeline Chat (Texte)
-    resp_text = get_chat_response(chat_history, user_text, context_info, url)
+    print(f"🧠 [EMOTION] visuelle={current_emotion}, haptique={current_haptic_action}")
+    resp_text = get_chat_response(chat_history, user_text, url,
+                                   emotion_visuelle=current_emotion,
+                                   action_haptique=current_haptic_action)
+    current_haptic_action = "Rien"  # Reset après utilisation
     
     # 2. Pipeline Animation (JSON)
     anim_dict = get_animation(resp_text, url)
@@ -359,7 +360,7 @@ def thread_ecoute():
 
 def thread_jacket():
     """Thread Veste (Producteur 2)"""
-    global chat_history, jacket_manager
+    global chat_history, jacket_manager, current_haptic_action
     
     if not jacket_manager: return
     
@@ -381,7 +382,8 @@ def thread_jacket():
                 continue
 
             print(f"⚡ [JKT] Geste reçu : {action}")
-            chat_history = [] # Reset conversation
+            chat_history = []
+            current_haptic_action = action
             
             phrase = ""
             geste = ""
@@ -415,7 +417,7 @@ def thread_jacket():
     jacket_manager.stop()
 
 def thread_camera():
-    global webcam, derniere_image
+    global webcam, derniere_image, current_emotion
     
     if not IS_ROS_MODE:
         webcam = cv2.VideoCapture(0)
@@ -460,6 +462,8 @@ def thread_camera():
                 if emotion_analyzer:
                     emo, _, box = emotion_analyzer.process_emotion(frame, [priority_face], scale_factor=2.0)
                     last_emotion_label = emo; last_box = box
+                    if emo:
+                        current_emotion = emo
                 
                 # Tracking Tête (Uniquement si queue vide pour éviter de saccader les gestes)
                 if IS_ROS_MODE and ros_client and ros_queue.empty() and not IS_ROBOT_SPEAKING:

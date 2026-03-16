@@ -1,7 +1,14 @@
 from .llm_client import call_llm
+from .emotion_fusion import obtenir_instruction_llm
 
-def get_chat_response(history: list, current_user_text: str, context_info: str, server_url: str) -> str:
-    system_content = f"Tu es un robot de compagnie. Parle français, répond brièvement. \n aide toi du Contexte pour répondre: {context_info}"
+def get_chat_response(history: list, current_user_text: str, server_url: str,
+                      emotion_visuelle: str = "Neutre", action_haptique: str = "Rien") -> str:
+    _, instruction_llm = obtenir_instruction_llm(emotion_visuelle, action_haptique)
+
+    system_content = (
+        "Tu es un assistant robot qui discute amicalement avec l'utilisateur, répond en français.\n"
+        f"Poursuis la conversation : {instruction_llm}"
+    )
 
     messages = [{"role": "system", "content": system_content}]
 
