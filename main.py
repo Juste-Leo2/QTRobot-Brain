@@ -68,7 +68,7 @@ elif OAPI_KEY:
 else:
     print(f"🏠 MODE LOCAL")
     from src.processing.agent_chat import get_chat_response
-    from src.processing.agent_fonction import choose_tool
+    from src.processing.agent_fonction import choose_tool, execute_tool
     from src.processing.agent_animation import get_animation
 
 ros_client = None
@@ -96,7 +96,8 @@ if args.JKT:
 # ==========================================
 # 1. VARIABLES GLOBALES & QUEUE
 # ==========================================
-ui = None; config = None; vosk = None; tts = None; server_manager = None
+ui = None; config = None; vosk = None; tts_fr = None; tts_en = None; server_manager = None
+current_lang = "fr"
 webcam = None; derniere_image = None; arret_programme = False 
 emotion_analyzer = None 
 AUDIO_OUTPUT = "output.wav"
@@ -144,9 +145,11 @@ def get_wav_duration(file_path):
 
 def generate_audio_only(texte):
     """Génère le fichier WAV sans le jouer."""
+    global current_lang, tts_fr, tts_en
     print(f"🔊 [TTS Génération] {texte[:30]}...")
     try:
-        tts.synthesize(texte, AUDIO_OUTPUT, speaker_id=0)
+        tts_active = tts_en if current_lang == "en" else tts_fr
+        tts_active.synthesize(texte, AUDIO_OUTPUT, speaker_id=0)
         return get_wav_duration(AUDIO_OUTPUT)
     except Exception as e:
         print(f"❌ Erreur TTS: {e}")
@@ -310,6 +313,18 @@ def pipeline_local(user_text):
     else:
         tool = choose_tool(user_text, url)
         update_ui_text(2, f"Outil (Local): {tool}")
+        
+    if tool != "None":
+        res = execute_tool(tool)
+        if res:
+            if "switch_lang" in res:
+                global current_lang
+                current_lang = res["switch_lang"]
+                print(f"🌍 [LANGUE] Changement de langue vers: {current_lang}")
+                
+            chat_history.append({"role": "user", "content": user_text})
+            chat_history.append({"role": "assistant", "content": res["text"]})
+            return res
             
     # 1. Pipeline Chat (Texte)
     print(f"🧠 [EMOTION] visuelle={current_emotion}, haptique={current_haptic_action}")
@@ -356,7 +371,9 @@ def should_pause_listening():
 def thread_ecoute():
     src = ros_audio_gen if IS_ROS_MODE else None
     print("🎤 Démarrage de l'écoute...")
-    vosk.start_transcription(traiter_commande, audio_source_iterator=src, pause_checker=should_pause_listening)
+    # Permet à vosk de lire la variable globale current_lang en temps réel
+    lang_getter = lambda: current_lang
+    vosk.start_transcription(traiter_commande, audio_source_iterator=src, pause_checker=should_pause_listening, language_getter=lang_getter)
 
 def thread_jacket():
     """Thread Veste (Producteur 2)"""
@@ -541,8 +558,13 @@ if __name__ == "__main__":
     if SHOW_UI:
         ui = UI(); ui.protocol("WM_DELETE_WINDOW", shutdown)
         
-    vosk = VoskRecognizer(model_path=config['models']['stt_vosk']['fr'])
-    tts = PiperTTS(model_path=config['models']['tts_piper']['fr_upmc'])
+    models_stt_dict = {
+        'fr': config['models']['stt_vosk']['fr'],
+        'en': config['models']['stt_vosk']['en']
+    }
+    vosk = VoskRecognizer(models_dict=models_stt_dict)
+    tts_fr = PiperTTS(model_path=config['models']['tts_piper']['fr_upmc'])
+    tts_en = PiperTTS(model_path=config['models']['tts_piper']['en_amy'])
     
     emotion_analyzer = EmotionAnalyzer()
 

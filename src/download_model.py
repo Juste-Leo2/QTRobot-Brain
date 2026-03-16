@@ -166,8 +166,11 @@ def main():
 
     models_to_check: List[Tuple[str, str, str, str, bool]] = [
         (config['models']['stt_vosk']['fr'], "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip", "zip", "VOSK FR", True),
-        (config['models']['tts_piper']['fr_upmc'], "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true", "file", "Piper TTS Model", False),
-        (str(config['models']['tts_piper']['fr_upmc']) + ".json", "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx.json?download=true", "file", "Piper TTS Config", False),
+        (config['models']['stt_vosk']['en'], "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip", "zip", "VOSK EN", True),
+        (config['models']['tts_piper']['fr_upmc'], "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx?download=true", "file", "Piper TTS Model FR", False),
+        (str(config['models']['tts_piper']['fr_upmc']) + ".json", "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx.json?download=true", "file", "Piper TTS Config FR", False),
+        (config['models']['tts_piper']['en_amy'], "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx?download=true", "file", "Piper TTS Model EN", False),
+        (str(config['models']['tts_piper']['en_amy']) + ".json", "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json?download=true", "file", "Piper TTS Config EN", False),
         (config['models']['llm']['qwen3.5_0_8b'], llm_text_url, "file", "LLM Main Model", False),
         (llama_exe_path, llama_bin_url, "archive", "Llama Server Binary", False),
     ]

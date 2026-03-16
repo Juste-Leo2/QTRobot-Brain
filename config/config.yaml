@@ -10,6 +10,8 @@ models:
   tts_piper:
     fr_upmc: "models/tts_piper/fr_FR-upmc-medium.onnx"
     fr_upmc_json: "models/tts_piper/fr_FR-upmc-medium.onnx.json"
+    en_amy: "models/tts_piper/en_US-amy-medium.onnx"
+    en_amy_json: "models/tts_piper/en_US-amy-medium.onnx.json"
   llm:
     qwen3.5_0_8b: "models/llm/Qwen3.5-0.8B-UD-Q4_K_XL.gguf"
 
