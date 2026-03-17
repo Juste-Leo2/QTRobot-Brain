@@ -245,11 +245,13 @@ def traiter_commande(user_text):
     update_ui_text(1, user_text)
 
     try:
+        pipeline_start = time.perf_counter()
+        
         # 1. LLM GENERATION
         if (API_KEY or OAPI_KEY) and api_handler:
-            result = pipeline_api(user_text)
+            result, timings = pipeline_api(user_text)
         else:
-            result = pipeline_local(user_text)
+            result, timings = pipeline_local(user_text)
             
         response_text = result["text"]
         action_robot = result["action"]
@@ -276,9 +278,16 @@ def traiter_commande(user_text):
         if action_robot != "None":
             ros_queue.put({"type": "gesture", "data": action_robot})
 
-        # C. Audio (On génère d'abord, puis on file l'ordre de jouer)
+        # C. Audio TTS (On génère d'abord, puis on file l'ordre de jouer)
+        t0_tts = time.perf_counter()
         duration = generate_audio_only(response_text)
+        timings["tts_piper"] = (time.perf_counter() - t0_tts) * 1000
         ros_queue.put({"type": "audio", "data": AUDIO_OUTPUT, "duration": duration})
+
+        # --- PRINT FINAL : Temps de la pipeline ---
+        total_ms = (time.perf_counter() - pipeline_start) * 1000
+        parts = " | ".join(f"{k}: {v:.0f}ms" for k, v in timings.items())
+        print(f"\n⏱️ [PIPELINE] {parts} | TOTAL: {total_ms:.0f}ms\n")
 
     except Exception as e:
         log(f"❌ [ERREUR] {e}")
@@ -288,30 +297,42 @@ def traiter_commande(user_text):
     IS_PROCESSING = False
 
 def pipeline_api(user_text):
+    timings = {}
+    
+    t0 = time.perf_counter()
     if args.no_tools:
         tool = "None"
         update_ui_text(2, "Outil (API): Désactivé")
     else:
         tool = api_handler.router_api(user_text)
         update_ui_text(2, f"Outil (API): {tool}")
+    timings["router"] = (time.perf_counter() - t0) * 1000
     
     tool_res = "None"
     if tool == "get_time": tool_res = obtenir_heure_formatee()
     
+    t0 = time.perf_counter()
     fused = api_handler.generate_fused_response(user_text, chat_history, tool_res, config)
+    timings["llm_response"] = (time.perf_counter() - t0) * 1000
+    
     chat_history.append({"role": "user", "content": user_text})
     chat_history.append({"role": "assistant", "content": fused["text"]})
-    return fused
+    return fused, timings
 
 def pipeline_local(user_text):
     global current_haptic_action
     url = config['llm_server']['url']
+    timings = {}
     
+    # --- Agent Fonction (Router / Tool Selection) ---
     tool = "None"
     if args.no_tools:
         update_ui_text(2, "Outil (Local): Désactivé")
+        timings["agent_fonction"] = 0.0
     else:
+        t0 = time.perf_counter()
         tool = choose_tool(user_text, url)
+        timings["agent_fonction"] = (time.perf_counter() - t0) * 1000
         update_ui_text(2, f"Outil (Local): {tool}")
         
     if tool != "None":
@@ -324,24 +345,30 @@ def pipeline_local(user_text):
                 
             chat_history.append({"role": "user", "content": user_text})
             chat_history.append({"role": "assistant", "content": res["text"]})
-            return res
+            timings["agent_chat"] = 0.0
+            timings["agent_animation"] = 0.0
+            return res, timings
             
-    # 1. Pipeline Chat (Texte)
+    # --- Agent Chat (LLM Text Generation) ---
     print(f"🧠 [EMOTION] visuelle={current_emotion}, haptique={current_haptic_action}")
+    t0 = time.perf_counter()
     resp_text = get_chat_response(chat_history, user_text, url,
                                    emotion_visuelle=current_emotion,
                                    action_haptique=current_haptic_action)
+    timings["agent_chat"] = (time.perf_counter() - t0) * 1000
     current_haptic_action = "Rien"  # Reset après utilisation
     
-    # 2. Pipeline Animation (JSON)
+    # --- Agent Animation (JSON) ---
+    t0 = time.perf_counter()
     anim_dict = get_animation(resp_text, url)
+    timings["agent_animation"] = (time.perf_counter() - t0) * 1000
     act = anim_dict["action"]
     disp = anim_dict["display"]
     
     chat_history.append({"role": "user", "content": user_text})
     chat_history.append({"role": "assistant", "content": resp_text})
     
-    return {"text": resp_text, "action": act, "display": disp}
+    return {"text": resp_text, "action": act, "display": disp}, timings
 
 
 
