@@ -25,10 +25,10 @@ def choose_tool(user_query: str, server_url: str) -> str:
         response = call_llm(
             server_url=server_url,
             messages=messages,
-            max_tokens=15,
+            max_tokens=8,
             temperature=0.1,
             top_p=1.0,
-            presence_penalty=2.0
+            presence_penalty=1.0
         )
         if response:
             content = response.choices[0].message.content.strip()

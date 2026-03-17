@@ -6,7 +6,7 @@ def get_chat_response(history: list, current_user_text: str, server_url: str,
     _, instruction_llm = obtenir_instruction_llm(emotion_visuelle, action_haptique)
 
     system_content = (
-        "Tu es un assistant robot qui discute amicalement avec l'utilisateur, répond en français.\n"
+        "Tu es un assistant robot qui discute amicalement avec l'utilisateur, répond en français très brièvement.\n"
         f"Poursuis la conversation : {instruction_llm}"
     )
 
@@ -25,7 +25,7 @@ def get_chat_response(history: list, current_user_text: str, server_url: str,
         response = call_llm(
             server_url=server_url,
             messages=messages,
-            max_tokens=1024,
+            max_tokens=512,
             temperature=t,
             top_p=tp,
             presence_penalty=pp,
