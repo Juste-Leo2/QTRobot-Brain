@@ -1,4 +1,4 @@
-#src/data_acquisition/emotions.py
+# src/data_acquisition/emotions.py
 import torch
 import cv2
 import numpy as np
@@ -6,9 +6,11 @@ from collections import deque, Counter
 from emotiefflib.facial_analysis import EmotiEffLibRecognizer, get_model_list
 
 class EmotionAnalyzer:
-    def __init__(self, device=None, window_size=10):
+    # <-- AJOUT : paramètre confidence_threshold
+    def __init__(self, device=None, window_size=10, confidence_threshold=0.5): 
         self.device = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         self.window_size = window_size
+        self.confidence_threshold = confidence_threshold # <-- AJOUT : sauvegarde du seuil
         
         # Historique des émotions pour le lissage (Vote majoritaire)
         self.emotion_history = deque(maxlen=self.window_size)
@@ -17,7 +19,8 @@ class EmotionAnalyzer:
         try:
             model_name = get_model_list()[0]
             self.fer = EmotiEffLibRecognizer(engine="onnx", model_name=model_name, device=self.device)
-            print(f"🧠 [EMOTION] Modèle chargé sur {self.device} (Lissage: {window_size} frames)")
+            # <-- AJOUT : affichage du seuil dans le print
+            print(f"🧠 [EMOTION] Modèle chargé sur {self.device} (Lissage: {window_size} frames, Seuil: {self.confidence_threshold})")
         except Exception as e:
             print(f"❌ [EMOTION] Erreur chargement modèle: {e}")
             self.fer = None
@@ -54,13 +57,18 @@ class EmotionAnalyzer:
             return None, None, None
 
         try:
-            # Prédiction sur le visage
-            # predict_emotions attend une liste d'images
-            emotions, _ = self.fer.predict_emotions([face_img], logits=False)
+            # Prédiction sur le visage (On récupère 'probs' au lieu de '_')
+            emotions, probs = self.fer.predict_emotions([face_img], logits=False) # <-- MODIFICATION
             current_emotion = emotions[0]
+            confidence = max(probs[0]) # <-- AJOUT : score de la prédiction
 
-            # Ajout à l'historique
-            self.emotion_history.append(current_emotion)
+            # Ajout à l'historique SEULEMENT si le seuil est atteint
+            if confidence >= self.confidence_threshold: # <-- AJOUT
+                self.emotion_history.append(current_emotion)
+
+            # Sécurité: si l'historique est vide (ex: la première frame est sous le seuil)
+            if len(self.emotion_history) == 0: # <-- AJOUT
+                return None, current_emotion, (x1, y1, x2, y2)
 
             # Vote majoritaire
             most_common = Counter(self.emotion_history).most_common(1)

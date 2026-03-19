@@ -138,27 +138,33 @@ def main():
     llm_text_url = "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q4_K_XL.gguf?download=true"
     
     if is_linux:
-        # 1. On déclare ces variables indispensables pour la suite du script
-        llama_exe_path = config['executables']['llama_server']['linux']
-        llama_bin_url = None  # None empêchera le téléchargement plus bas
-        llama_exe_name_in_zip = None
+            # 1. On déclare ces variables indispensables pour la suite du script
+            llama_exe_path = config['executables']['llama_server']['linux']
+            llama_bin_url = None  # None empêchera le téléchargement plus bas
+            llama_exe_name_in_zip = None
 
-        # 2. Trouver le chemin absolu du script bash
-        project_root = Path(__file__).resolve().parent.parent
-        script_path = project_root / "compile_llamacpp.sh"
+            # --- NOUVELLE LOGIQUE : On vérifie si le binaire existe déjà ---
+            full_llama_path = PROJECT_ROOT / llama_exe_path
+            
+            if full_llama_path.exists():
+                print(f"✅ Binaire llama-server déjà présent sous Linux. Compilation ignorée.")
+            else:
+                # 2. Trouver le chemin absolu du script bash
+                project_root = Path(__file__).resolve().parent.parent
+                script_path = project_root / "compile_llamacpp.sh"
 
-        print("🐧 Linux détecté : Lancement du script de compilation local...")
+                print("🐧 Linux détecté (binaire manquant) : Lancement du script de compilation local...")
 
-        if not script_path.exists():
-            raise FileNotFoundError(f"❌ Script introuvable à l'emplacement : {script_path}")
+                if not script_path.exists():
+                    raise FileNotFoundError(f"❌ Script introuvable à l'emplacement : {script_path}")
 
-        try:
-            # 3. Exécuter le script bash
-            subprocess.run(["bash", str(script_path)], cwd=str(project_root), check=True)
-            print("✅ Exécution du script de compilation terminée avec succès.")
+                try:
+                    # 3. Exécuter le script bash
+                    subprocess.run(["bash", str(script_path)], cwd=str(project_root), check=True)
+                    print("✅ Exécution du script de compilation terminée avec succès.")
 
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"❌ Le script a échoué avec le code erreur : {e.returncode}")
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(f"❌ Le script a échoué avec le code erreur : {e.returncode}")
     else:
         llama_bin_url = "https://github.com/ggml-org/llama.cpp/releases/download/b8287/llama-b8287-bin-win-cpu-x64.zip"
         llama_exe_path = config['executables']['llama_server']['win']

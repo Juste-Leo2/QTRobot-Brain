@@ -593,7 +593,7 @@ if __name__ == "__main__":
     tts_fr = PiperTTS(model_path=config['models']['tts_piper']['fr_upmc'])
     tts_en = PiperTTS(model_path=config['models']['tts_piper']['en_amy'])
     
-    emotion_analyzer = EmotionAnalyzer()
+    emotion_analyzer = EmotionAnalyzer(window_size=15, confidence_threshold=0.6)
 
     # Lancement des threads
     threading.Thread(target=thread_ros_executor, daemon=True).start() # <-- LE CHEF D'ORCHESTRE
